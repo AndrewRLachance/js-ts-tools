@@ -1,0 +1,59 @@
+{
+  "name": "js-ts-tools",
+  "version": "1.0.0",
+  "description": "",
+  "type": "commonjs",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "context-pack": "./bin/context-pack-cli.js",
+    "code-impact": "./bin/code-impact-cli.js",
+    "code-slice": "./bin/code-slice-cli.js",
+    "code-patterns": "./bin/code-patterns-cli.js",
+    "collect-types": "./bin/collect-types-cli.js",
+    "create-project": "./bin/create-project-cli.js",
+    "code-graph": "./bin/graph-api-cli.js",
+    "json-jspath": "./bin/json-jspath-cli.js"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "CLI_API.md",
+    "NOTES.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test",
+    "start": "tsx src/index.ts",
+    "build": "tsc -p tsconfig.json && chmod +x bin/*.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@aws-sdk/types": "^3.973.12",
+    "@types/aws-api-gateway-client": "^0.3.3",
+    "@types/aws-cloudfront-function": "^1.0.8",
+    "@types/aws-kcl": "^2.0.5",
+    "@types/aws-lambda": "^8.10.162",
+    "@types/aws-lambda-fastify": "^1.4.5",
+    "@types/aws-lambda-http-server": "^0.2.3",
+    "@types/aws-param-store": "^3.2.4",
+    "@types/aws-regions": "^2.1.5",
+    "@types/mysql": "^2.15.27",
+    "@types/pg": "^8.20.0",
+    "fast-glob": "^3.3.3",
+    "jspath": "^0.4.0",
+    "openapi-fetch": "^0.17.0",
+    "stream-json": "^3.4.0",
+    "ts-morph": "^28.0.0"
+  },
+  "devDependencies": {
+    "@types/jspath": "^0.4.2",
+    "@types/node": "^25.9.4",
+    "openapi-typescript": "^7.13.0",
+    "ts-morph-associated-declarations": "file:external-packages/ts-morph-associated-declarations-0.1.0.tgz",
+    "tsx": "^4.22.4",
+    "typescript": "^5.9.3"
+  }
+}
