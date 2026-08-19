@@ -10,6 +10,7 @@
     "code-impact": "./bin/code-impact-cli.js",
     "code-slice": "./bin/code-slice-cli.js",
     "code-patterns": "./bin/code-patterns-cli.js",
+    "type-model": "./bin/type-model-cli.js",
     "collect-types": "./bin/collect-types-cli.js",
     "create-project": "./bin/create-project-cli.js",
     "code-graph": "./bin/graph-api-cli.js",

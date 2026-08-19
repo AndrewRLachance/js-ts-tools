@@ -31,6 +31,7 @@ expands them.
 | `code-impact` | Find code and tests affected by a symbol or file | JSON |
 | `code-slice` | Extract relevant declarations, imports, and dependency paths | JSON |
 | `code-patterns` | Detect architectural and design patterns | JSON |
+| `type-model` | Extract a normalized resolved TypeScript type graph | JSON |
 | `collect-types` | Emit a self-contained declaration closure | TypeScript |
 | `create-project` | Create or extract a directory structure | Text or JSON |
 | `code-graph` | Build structural and semantic code graphs | JSON |
@@ -298,6 +299,76 @@ code-patterns \
   --min-confidence medium \
   --pretty
 ```
+
+## `type-model`
+
+Extracts the TypeScript checker's resolved semantic model into deterministic,
+normalized JSON. Schema version `2` includes symbols, advanced types, call and
+construct signatures, inferred parameter and return types, raw JSDoc, module
+exports, optional resolved call sites, and compiler diagnostics. Recursive and
+shared types use references instead of nested copies.
+
+### Syntax
+
+```text
+type-model --source <glob> [options]
+```
+
+### Options
+
+| Option | Value and behavior |
+| --- | --- |
+| `--source <glob>` | Required root-selection glob. Repeatable. |
+| `--tsconfig <path>` | TypeScript configuration. Default: `tsconfig.json`. |
+| `--exclude <substring>` | Exclude matching files from root selection. Repeatable. |
+| `--scope <scope>` | `exports` or `all`. Default: `exports`. |
+| `--include-call-sites` | Include resolved call-like expressions from matched, non-excluded files. |
+| `--pretty` | Indent JSON output. |
+| `--out <path>` | Write JSON to a file, creating parent directories. |
+| `-h`, `--help` | Print help. |
+
+The complete tsconfig program remains available to the type checker. Source
+globs and exclusions only select modules whose declarations become roots.
+With `exports`, roots are the modules' direct and re-exported public symbols.
+With `all`, roots are all named top-level declarations in those modules.
+Call-site extraction is opt-in and independent of root scope. When enabled it
+scans only the selected files, while the complete tsconfig program remains
+available for resolving callees and types.
+
+```bash
+type-model \
+  --source "src/**/*.ts" \
+  --scope exports \
+  --include-call-sites \
+  --pretty \
+  --out type-model.json
+```
+
+The top-level JSON fields are:
+
+```text
+schemaVersion, project, modules, roots, symbols, types, signatures, callSites, diagnostics
+```
+
+`symbols`, `types`, `signatures`, and `callSites` are ID-keyed tables.
+Project-local conditional, mapped, indexed-access, `keyof`, template-literal,
+string-mapping, and substitution types are expanded structurally. Types supplied
+by `node_modules` or TypeScript's standard libraries remain opaque `external`
+records whose type arguments are still represented.
+
+Raw JSDoc entries preserve their exact source comment text and location on
+symbols, properties, and signatures. Object call/construct signature arrays are
+the callable overload sets; implementation-only overload signatures are not
+included.
+
+Call sites cover calls, `new`, tagged templates, decorators, JSX, and
+`instanceof`. Resolved records link the selected declaration signature to a
+possibly distinct instantiated signature, and generic instantiations map type
+parameters to explicit or inferred resolved types. Unresolved calls and
+incomplete compiler inference maps add warnings without failing extraction.
+Unsupported future compiler forms remain explicit `unsupported` records.
+TypeScript syntactic and semantic diagnostics are also returned without changing
+CLI exit status.
 
 ## `collect-types`
 
