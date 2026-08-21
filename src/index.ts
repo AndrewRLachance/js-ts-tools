@@ -72,6 +72,7 @@ export type {
   TypeModelCallSiteRef,
   TypeModelConditionalType,
   TypeModelDiagnostic,
+  TypeModelDeclarationBundle,
   TypeModelExport,
   TypeModelGenericBinding,
   TypeModelGenericInstantiation,
@@ -82,8 +83,12 @@ export type {
   TypeModelMappedModifier,
   TypeModelMappedType,
   TypeModelModule,
+  TypeModelModuleBase,
+  TypeModelModuleV2,
+  TypeModelModuleV3,
   TypeModelParameter,
   TypeModelProperty,
+  TypeModelProject,
   TypeModelResolvedType,
   TypeModelScope,
   TypeModelSignature,
@@ -97,4 +102,47 @@ export type {
   TypeModelTypeBase,
   TypeModelTypeParameter,
   TypeModelTypeRef,
+  TypeModelV2,
+  TypeModelV3,
 } from "./tools/type-model";
+export {
+  generateTypeDeclarationsFromModel,
+  saveTypeDeclarationsFromModel,
+} from "./tools/type-model-declarations";
+export type {
+  GenerateTypeDeclarationsOptions,
+  GeneratedTypeDeclarations,
+  SavedTypeDeclarations,
+  TypeModelDeclarationDiagnostic,
+} from "./tools/type-model-declarations";
+export {
+  DEFAULT_IGNORE,
+  createFromJsonFile,
+  createStructure,
+  extractStructure,
+  readStructureFile,
+  structureToJson,
+  writeStructureFile,
+} from "./tools/create-project";
+
+export type {
+  CreateFromJsonFileResult,
+  CreateStructureOptions,
+  ExtractStructureOptions,
+  ProjectStructure,
+  ProjectStructureValue,
+  WriteStructureFileResult,
+} from "./tools/create-project";
+export {
+  findPackageReferences,
+  importsAnyPackage,
+  searchGitHubPackageImports,
+} from "./tools/github-js-ts-search";
+export type {
+  GitHubPackageImportMatch,
+  GitHubPackageImportQueryStatus,
+  GitHubPackageImportSearchReport,
+  PackageReference,
+  PackageReferenceKind,
+  SearchGitHubPackageImportsOptions,
+} from "./tools/github-js-ts-search";

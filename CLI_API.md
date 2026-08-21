@@ -36,6 +36,7 @@ expands them.
 | `create-project` | Create or extract a directory structure | Text or JSON |
 | `code-graph` | Build structural and semantic code graphs | JSON |
 | `json-jspath` | Apply JSPath expressions to JSON files | JSON array |
+| `github-js-ts-search` | Download GitHub files importing npm packages | Source snapshots and JSON manifest |
 
 ## Shared analysis concepts
 
@@ -303,7 +304,7 @@ code-patterns \
 ## `type-model`
 
 Extracts the TypeScript checker's resolved semantic model into deterministic,
-normalized JSON. Schema version `2` includes symbols, advanced types, call and
+normalized JSON. The default schema version `2` includes symbols, advanced types, call and
 construct signatures, inferred parameter and return types, raw JSDoc, module
 exports, optional resolved call sites, and compiler diagnostics. Recursive and
 shared types use references instead of nested copies.
@@ -369,6 +370,42 @@ incomplete compiler inference maps add warnings without failing extraction.
 Unsupported future compiler forms remain explicit `unsupported` records.
 TypeScript syntactic and semantic diagnostics are also returned without changing
 CLI exit status.
+
+### Programmatic declaration generation
+
+The library API can opt into schema version `3`, which embeds a standalone
+declaration bundle for every selected module. This option is intentionally not
+exposed by the CLI because bundle payloads can substantially increase extraction
+time and JSON size.
+
+```ts
+import {
+  extractTypeModel,
+  generateTypeDeclarationsFromModel,
+  saveTypeDeclarationsFromModel,
+} from "js-ts-tools";
+
+const model = extractTypeModel({
+  sourceGlob: "src/index.ts",
+  tsConfigFilePath: "tsconfig.json",
+  includeDeclarationBundles: true,
+});
+
+const generated = generateTypeDeclarationsFromModel(model);
+console.log(generated.text);
+
+await saveTypeDeclarationsFromModel(
+  JSON.parse(JSON.stringify(model)),
+  "generated/index.d.ts",
+);
+```
+
+When a model contains multiple selected modules, pass the exact module id or
+file path as `{ module: "src/index.ts" }`. Successful schema version `3`
+payloads are compiler-derived declaration bundles containing project-local
+dependencies and external package imports. Schema version `2` models and failed
+bundle payloads use a structural fallback and return warnings alongside the
+generated text.
 
 ## `collect-types`
 
@@ -589,6 +626,26 @@ element. Other JSON documents are parsed as a whole.
 
 With `--continue-on-error`, errors are written to stderr, valid files continue
 to produce output, and the final exit status is still `1` if any file failed.
+
+## `github-js-ts-search`
+
+Downloads exact Git blob snapshots for JavaScript and TypeScript files that
+statically import or directly `require` an npm package. Set `GITHUB_TOKEN`
+before running the command.
+
+### Syntax
+
+```text
+github-js-ts-search [--out <directory>] <package> [package ...]
+```
+
+`--out` overrides `OUT_DIR`; otherwise output defaults to `downloads`. Matching
+files are stored beneath `files/<owner>/<repo>/<blob-sha>/`, and a successful
+run writes `manifest.json`. Dynamic imports and re-exports are excluded.
+
+GitHub-wide code search is bounded by GitHub's indexing and result limits.
+Incomplete or truncated queries produce warnings and are recorded in the
+manifest without changing the successful exit status.
 
 ## Exit statuses
 

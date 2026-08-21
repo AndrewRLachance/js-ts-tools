@@ -14,14 +14,19 @@
     "collect-types": "./bin/collect-types-cli.js",
     "create-project": "./bin/create-project-cli.js",
     "code-graph": "./bin/graph-api-cli.js",
-    "json-jspath": "./bin/json-jspath-cli.js"
+    "json-jspath": "./bin/json-jspath-cli.js",
+    "github-js-ts-search": "./bin/github-js-ts-search-cli.js"
   },
   "files": [
     "dist",
     "bin",
     "CLI_API.md",
+    "GITHUB_SEARCH_API.md",
     "NOTES.md"
   ],
+  "engines": {
+    "node": ">=24.12"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test",
@@ -43,6 +48,7 @@
     "@types/aws-regions": "^2.1.5",
     "@types/mysql": "^2.15.27",
     "@types/pg": "^8.20.0",
+    "dts-bundle-generator": "^9.5.1",
     "fast-glob": "^3.3.3",
     "jspath": "^0.4.0",
     "openapi-fetch": "^0.17.0",

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { generateDtsBundle } from "dts-bundle-generator";
 import {
   Node,
   Project,
@@ -28,6 +29,12 @@ export interface ExtractTypeModelOptions {
   excludePathIncludes?: string[];
   scope?: TypeModelScope;
   includeCallSites?: boolean;
+  /**
+   * Include a standalone declaration bundle for every selected source module.
+   * This is opt-in because declaration bundling can substantially increase
+   * extraction time and serialized model size.
+   */
+  includeDeclarationBundles?: boolean;
   cwd?: string;
 }
 
@@ -58,13 +65,35 @@ export interface TypeModelExport {
   targetSymbolId: TypeModelSymbolRef;
 }
 
-export interface TypeModelModule {
+export interface TypeModelModuleBase {
   id: string;
   filePath: string;
   roots: TypeModelSymbolRef[];
   exports: TypeModelExport[];
   callSites: TypeModelCallSiteRef[];
 }
+
+export type TypeModelDeclarationBundle =
+  | {
+      format: "d.ts";
+      status: "generated";
+      text: string;
+    }
+  | {
+      format: "d.ts";
+      status: "failed";
+      diagnosticCode: "declaration-bundle-failed";
+    };
+
+export interface TypeModelModuleV2 extends TypeModelModuleBase {
+  declarationBundle?: never;
+}
+
+export interface TypeModelModuleV3 extends TypeModelModuleBase {
+  declarationBundle: TypeModelDeclarationBundle;
+}
+
+export type TypeModelModule = TypeModelModuleV2 | TypeModelModuleV3;
 
 export interface TypeModelSymbol {
   id: TypeModelSymbolRef;
@@ -260,17 +289,16 @@ export type TypeModelResolvedType =
     })
   | (TypeModelTypeBase & { kind: "unsupported"; reason: string });
 
-export interface TypeModel {
-  schemaVersion: "2";
-  project: {
-    typescriptVersion: string;
-    tsconfigPath: string;
-    scope: TypeModelScope;
-    includeCallSites: boolean;
-    sourceGlobs: string[];
-    selectedFiles: string[];
-  };
-  modules: TypeModelModule[];
+export interface TypeModelProject {
+  typescriptVersion: string;
+  tsconfigPath: string;
+  scope: TypeModelScope;
+  includeCallSites: boolean;
+  sourceGlobs: string[];
+  selectedFiles: string[];
+}
+
+interface TypeModelTables {
   roots: TypeModelSymbolRef[];
   symbols: Record<TypeModelSymbolRef, TypeModelSymbol>;
   types: Record<TypeModelTypeRef, TypeModelResolvedType>;
@@ -278,6 +306,20 @@ export interface TypeModel {
   callSites: Record<TypeModelCallSiteRef, TypeModelCallSite>;
   diagnostics: TypeModelDiagnostic[];
 }
+
+export interface TypeModelV2 extends TypeModelTables {
+  schemaVersion: "2";
+  project: TypeModelProject;
+  modules: TypeModelModuleV2[];
+}
+
+export interface TypeModelV3 extends TypeModelTables {
+  schemaVersion: "3";
+  project: TypeModelProject & { includeDeclarationBundles: true };
+  modules: TypeModelModuleV3[];
+}
+
+export type TypeModel = TypeModelV2 | TypeModelV3;
 
 type SignatureKind = TypeModelSignature["kind"];
 type SerializationMode = "normal" | "shape";
@@ -338,6 +380,13 @@ const TYPE_FORMAT_FLAGS =
   ts.TypeFormatFlags.UseAliasDefinedOutsideCurrentScope |
   ts.TypeFormatFlags.WriteArrowStyleSignature;
 
+export function extractTypeModel(
+  options: ExtractTypeModelOptions & { includeDeclarationBundles: true },
+): TypeModelV3;
+export function extractTypeModel(
+  options: ExtractTypeModelOptions & { includeDeclarationBundles?: false },
+): TypeModelV2;
+export function extractTypeModel(options: ExtractTypeModelOptions): TypeModel;
 export function extractTypeModel(options: ExtractTypeModelOptions): TypeModel {
   const sourceGlobs = asArray(options.sourceGlob);
   if (sourceGlobs.length === 0) throw new Error("At least one source glob is required.");
@@ -383,17 +432,15 @@ export function extractTypeModel(options: ExtractTypeModelOptions): TypeModel {
   }
   const roots = [...new Set(modules.flatMap((module) => module.roots))].sort();
 
-  return {
-    schemaVersion: "2",
-    project: {
-      typescriptVersion: ts.version,
-      tsconfigPath: normalizePath(path.relative(projectRoot, tsConfigFilePath) || path.basename(tsConfigFilePath)),
-      scope,
-      includeCallSites: context.includeCallSites,
-      sourceGlobs: sourceGlobs.map((glob) => sanitizeText(glob, projectRoot)).sort(),
-      selectedFiles: selectedFiles.map((sourceFile) => projectPath(context, sourceFile.getFilePath())),
-    },
-    modules: modules.sort((left, right) => left.filePath.localeCompare(right.filePath)),
+  const projectModel: TypeModelProject = {
+    typescriptVersion: ts.version,
+    tsconfigPath: normalizePath(path.relative(projectRoot, tsConfigFilePath) || path.basename(tsConfigFilePath)),
+    scope,
+    includeCallSites: context.includeCallSites,
+    sourceGlobs: sourceGlobs.map((glob) => sanitizeText(glob, projectRoot)).sort(),
+    selectedFiles: selectedFiles.map((sourceFile) => projectPath(context, sourceFile.getFilePath())),
+  };
+  const tables: TypeModelTables = {
     roots,
     symbols: sortedRecord(context.symbols),
     types: sortedRecord(context.types),
@@ -401,6 +448,76 @@ export function extractTypeModel(options: ExtractTypeModelOptions): TypeModel {
     callSites: sortedRecord(context.callSites),
     diagnostics: context.diagnostics.sort(compareDiagnostics),
   };
+
+  if (options.includeDeclarationBundles) {
+    const bundledModules = modules.map((module, index): TypeModelModuleV3 => ({
+      ...module,
+      declarationBundle: createDeclarationBundle(context, selectedFiles[index]),
+    }));
+    tables.diagnostics.sort(compareDiagnostics);
+    return {
+      schemaVersion: "3",
+      project: { ...projectModel, includeDeclarationBundles: true },
+      modules: bundledModules.sort((left, right) => left.filePath.localeCompare(right.filePath)),
+      ...tables,
+    };
+  }
+
+  return {
+    schemaVersion: "2",
+    project: projectModel,
+    modules: modules.sort((left, right) => left.filePath.localeCompare(right.filePath)),
+    ...tables,
+  };
+}
+
+function createDeclarationBundle(
+  context: MutableContext,
+  sourceFile: SourceFile,
+): TypeModelDeclarationBundle {
+  try {
+    const [text] = generateDtsBundle([
+      {
+        filePath: sourceFile.getFilePath(),
+        output: {
+          exportReferencedTypes: false,
+          noBanner: true,
+          sortNodes: true,
+        },
+      },
+    ], {
+      preferredConfigPath: context.tsConfigFilePath,
+    });
+    if (!text?.trim()) {
+      throw new Error("Declaration bundler returned empty output");
+    }
+    return {
+      format: "d.ts",
+      status: "generated",
+      text: normalizeGeneratedText(text),
+    };
+  } catch (error) {
+    context.diagnostics.push({
+      source: "type-model",
+      category: "warning",
+      code: "declaration-bundle-failed",
+      message: `Could not generate declaration bundle for ${projectPath(context, sourceFile.getFilePath())}: ${sanitizeText(errorMessage(error), context.projectRoot)}`,
+      location: {
+        filePath: projectPath(context, sourceFile.getFilePath()),
+        line: 1,
+        column: 1,
+      },
+    });
+    return {
+      format: "d.ts",
+      status: "failed",
+      diagnosticCode: "declaration-bundle-failed",
+    };
+  }
+}
+
+function normalizeGeneratedText(text: string): string {
+  return `${text.replace(/\r\n?/g, "\n").trim()}\n`;
 }
 
 function selectSourceFiles(project: Project, cwd: string, globs: string[], exclusions: string[]): SourceFile[] {
@@ -416,7 +533,7 @@ function selectSourceFiles(project: Project, cwd: string, globs: string[], exclu
   return [...selected.values()].sort((left, right) => left.getFilePath().localeCompare(right.getFilePath()));
 }
 
-function serializeModule(context: MutableContext, sourceFile: SourceFile): TypeModelModule {
+function serializeModule(context: MutableContext, sourceFile: SourceFile): TypeModelModuleV2 {
   const filePath = projectPath(context, sourceFile.getFilePath());
   const exportSymbols = sourceFile.getExportSymbols().map((symbol) => symbol.compilerSymbol)
     .sort(compareCompilerSymbols);
