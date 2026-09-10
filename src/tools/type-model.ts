@@ -657,11 +657,19 @@ function serializeType(
     ? namedSymbol
     : undefined;
   if (externalNamedSymbol && (type.flags & ts.TypeFlags.StringMapping) === 0) {
+    const externalDisplayText = externalTypeReferenceText(
+      context,
+      externalNamedSymbol,
+      enclosingNode,
+      displayText,
+    );
     const model: TypeModelResolvedType = {
       ...base,
+      displayText: externalDisplayText,
       kind: "external",
       symbolId: serializeSymbol(context, externalNamedSymbol),
-      typeArguments: getTypeArguments(context, type).map((argument) => serializeType(context, argument, enclosingNode)),
+      typeArguments: getExternalTypeArguments(context, type, mode)
+        .map((argument) => serializeType(context, argument, enclosingNode)),
     };
     context.types.set(id, model);
     return id;
@@ -757,6 +765,27 @@ function serializeType(
 
   context.types.set(id, model);
   return id;
+}
+
+function externalTypeReferenceText(
+  context: MutableContext,
+  symbol: ts.Symbol,
+  enclosingNode: ts.Node | undefined,
+  fallback: string,
+): string {
+  if (!enclosingNode || !ts.isTypeAliasDeclaration(enclosingNode)) return fallback;
+  const typeNode = enclosingNode.type;
+  if (!ts.isTypeReferenceNode(typeNode)) return fallback;
+  const referenceName = typeNode.typeName.getText(typeNode.getSourceFile());
+  const parts = referenceName.split(".");
+  if (parts.length < 2 || parts.at(-1) !== symbol.getName() || parts.some((part) => !isIdentifierText(part))) {
+    return fallback;
+  }
+  return sanitizeText(typeNode.getText(typeNode.getSourceFile()), context.projectRoot);
+}
+
+function isIdentifierText(text: string): boolean {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(text);
 }
 
 function serializeConditionalType(
@@ -956,12 +985,12 @@ function serializeTypeParameter(
 ): TypeModelTypeParameter {
   const declaration = typeParameter.symbol?.declarations?.find(ts.isTypeParameterDeclaration);
   const internal = typeParameter as InternalTypeParameter;
-  const constraint = internal.constraint ?? (declaration?.constraint
-    ? context.checker.getTypeFromTypeNode(declaration.constraint)
-    : undefined);
-  const defaultType = internal.default ?? (declaration?.default
-    ? context.checker.getTypeFromTypeNode(declaration.default)
-    : undefined);
+  const constraint = declaration
+    ? declaration.constraint ? context.checker.getTypeFromTypeNode(declaration.constraint) : undefined
+    : internal.constraint;
+  const defaultType = declaration
+    ? declaration.default ? context.checker.getTypeFromTypeNode(declaration.default) : undefined
+    : internal.default;
   return {
     name: typeParameter.symbol?.getName() ?? safeTypeText(context, typeParameter, enclosingNode),
     type: serializeType(context, typeParameter, enclosingNode),
@@ -1190,6 +1219,21 @@ function getNamedTypeSymbol(type: ts.Type): ts.Symbol | undefined {
 
 function getTypeArguments(context: MutableContext, type: ts.Type): readonly ts.Type[] {
   if (type.aliasTypeArguments && type.aliasTypeArguments.length > 0) return type.aliasTypeArguments;
+  return getUnderlyingTypeArguments(context, type);
+}
+
+function getExternalTypeArguments(
+  context: MutableContext,
+  type: ts.Type,
+  mode: SerializationMode,
+): readonly ts.Type[] {
+  if (mode === "shape" && type.aliasSymbol && !isExternalSymbol(context, type.aliasSymbol)) {
+    return getUnderlyingTypeArguments(context, type);
+  }
+  return getTypeArguments(context, type);
+}
+
+function getUnderlyingTypeArguments(context: MutableContext, type: ts.Type): readonly ts.Type[] {
   if ((type.flags & ts.TypeFlags.Object) !== 0 && ((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference) !== 0) {
     return context.checker.getTypeArguments(type as ts.TypeReference);
   }

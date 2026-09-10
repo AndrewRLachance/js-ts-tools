@@ -18,6 +18,28 @@ export interface GenerateTypeDeclarationsOptions {
   module?: string;
   /** Defaults to a generated-file banner. Set false to omit it. */
   banner?: string | false;
+  /**
+   * Permit the lossy schema-v2 structural renderer when no authenticated
+   * declaration bundle is available. Exact bundle-backed generation is the
+   * default in v2.0.
+   */
+  structuralFallback?: "allow";
+}
+
+/** Raised when exact declaration bytes are unavailable for the selected module. */
+export class ExactDeclarationUnavailableError extends Error {
+  readonly code = "exact-declaration-unavailable";
+  constructor(
+    readonly moduleId: string,
+    readonly schemaVersion: TypeModel["schemaVersion"],
+    readonly bundleStatus: "absent" | "failed",
+  ) {
+    super(
+      `Exact declarations are unavailable for ${moduleId}: type-model schema ${schemaVersion} has bundle status ${bundleStatus}. `
+      + `Re-extract with includeDeclarationBundles: true or explicitly set structuralFallback: "allow".`,
+    );
+    this.name = "ExactDeclarationUnavailableError";
+  }
 }
 
 export interface TypeModelDeclarationDiagnostic {
@@ -83,7 +105,22 @@ export function generateTypeDeclarationsFromModel(
     };
   }
 
+  if (options.structuralFallback !== "allow") {
+    throw new ExactDeclarationUnavailableError(
+      module.id,
+      model.schemaVersion,
+      bundled?.status === "failed" ? "failed" : "absent",
+    );
+  }
+
   const generated = generateStructuralDeclarations(model, module);
+  if (moduleUsesExplicitAnnotations(model, module)) {
+    generated.diagnostics.unshift({
+      category: "warning",
+      code: "structural-annotation-fidelity-not-guaranteed",
+      message: `Structural declaration generation for ${module.filePath} cannot guarantee preservation of explicit source annotations.`,
+    });
+  }
   if (bundled?.status === "failed") {
     const extractionDiagnostic = findBundleDiagnostic(model.diagnostics, module.filePath);
     generated.diagnostics.unshift({
@@ -101,6 +138,18 @@ export function generateTypeDeclarationsFromModel(
     mode: "structural-fallback",
     diagnostics: generated.diagnostics,
   };
+}
+
+function moduleUsesExplicitAnnotations(model: TypeModel, _module: TypeModelModule): boolean {
+  // Re-exported symbols are rendered as part of the selected module even when
+  // their declarations live in another project-local source file. Treat the
+  // model conservatively: structural rendering cannot prove that any explicit
+  // annotation reachable through those exports retained its source spelling.
+  return Object.values(model.signatures).some((signature) =>
+    signature.returnAnnotation === "explicit"
+      || signature.parameters.some((parameter) => parameter.annotation === "explicit")
+      || signature.thisParameter?.annotation === "explicit"
+  );
 }
 
 export async function saveTypeDeclarationsFromModel(
@@ -302,7 +351,7 @@ function renderType(
 
   if (context.rendering.has(typeId)) {
     const recursiveName = type.aliasSymbolId
-      ? nameForReferencedSymbol(context, type.aliasSymbolId)
+      ? nameForReferencedSymbol(context, type.aliasSymbolId, type.displayText)
       : printableDisplayText(type);
     if (recursiveName) return recursiveName;
     warn(context, "anonymous-type-cycle", `Anonymous recursive type ${typeId} was replaced with unknown.`, { typeId });
@@ -310,7 +359,7 @@ function renderType(
   }
 
   if (type.aliasSymbolId && type.aliasSymbolId !== rootSymbolId) {
-    const aliasName = nameForReferencedSymbol(context, type.aliasSymbolId);
+    const aliasName = nameForReferencedSymbol(context, type.aliasSymbolId, type.displayText);
     const argumentsText = type.aliasTypeArguments?.length
       ? `<${type.aliasTypeArguments.map((argument) => renderType(context, argument)).join(", ")}>`
       : "";
@@ -366,9 +415,9 @@ function renderTypeValue(
       if (expandRootReference && type.symbolId === rootSymbolId) {
         return renderType(context, type.target, rootSymbolId, false, inferredTypeIds);
       }
-      return `${nameForReferencedSymbol(context, type.symbolId)}${renderTypeArguments(context, type.typeArguments)}`;
+      return `${nameForReferencedSymbol(context, type.symbolId, type.displayText)}${renderTypeArguments(context, type.typeArguments)}`;
     case "external":
-      return `${nameForReferencedSymbol(context, type.symbolId)}${renderTypeArguments(context, type.typeArguments)}`;
+      return `${nameForReferencedSymbol(context, type.symbolId, type.displayText)}${renderTypeArguments(context, type.typeArguments)}`;
     case "conditional": {
       const inferred = new Set<TypeModelTypeRef>([...inferredTypeIds, ...type.inferTypeParameters]);
       for (const inferredId of type.inferTypeParameters) {
@@ -478,7 +527,7 @@ function collectRootTypeParameters(
   typeId: TypeModelTypeRef,
   rootSymbolId: TypeModelSymbolRef,
 ): TypeModelTypeParameter[] {
-  const result = new Map<TypeModelTypeRef, TypeModelTypeParameter>();
+  const result = new Map<string, TypeModelTypeParameter>();
   const visiting = new Set<TypeModelTypeRef>();
   const visit = (currentId: TypeModelTypeRef, bound: ReadonlySet<TypeModelTypeRef>, expandRoot = false): void => {
     if (visiting.has(currentId)) return;
@@ -486,12 +535,14 @@ function collectRootTypeParameters(
     if (!type) return;
     if (type.kind === "typeParameter") {
       if (!bound.has(type.id)) {
-        result.set(type.id, {
-          name: type.name,
-          type: type.id,
-          ...(type.constraint ? { constraint: type.constraint } : {}),
-          ...(type.default ? { default: type.default } : {}),
-        });
+        if (!result.has(type.name)) {
+          result.set(type.name, {
+            name: type.name,
+            type: type.id,
+            ...(type.constraint ? { constraint: type.constraint } : {}),
+            ...(type.default ? { default: type.default } : {}),
+          });
+        }
       }
       return;
     }
@@ -499,7 +550,10 @@ function collectRootTypeParameters(
     if (type.kind === "reference" && (!expandRoot || type.symbolId !== rootSymbolId)) return;
     visiting.add(currentId);
     try {
-      if (type.kind === "reference") visit(type.target, bound);
+      if (type.kind === "reference") {
+        type.typeArguments.forEach((argument) => visit(argument, bound));
+        visit(type.target, bound);
+      } else if (type.kind === "external") type.typeArguments.forEach((argument) => visit(argument, bound));
       else if (type.kind === "union" || type.kind === "intersection") type.types.forEach((id) => visit(id, bound));
       else if (type.kind === "array") visit(type.elementType, bound);
       else if (type.kind === "tuple") type.elements.forEach((element) => visit(element.type, bound));
@@ -613,7 +667,11 @@ function queueSymbol(context: RenderContext, symbolId: TypeModelSymbolRef): void
   nameForSymbol(context, symbolId);
 }
 
-function nameForReferencedSymbol(context: RenderContext, symbolId: TypeModelSymbolRef): string {
+function nameForReferencedSymbol(
+  context: RenderContext,
+  symbolId: TypeModelSymbolRef,
+  displayText?: string,
+): string {
   const symbol = context.model.symbols[symbolId];
   if (!symbol) {
     warn(context, "missing-symbol", `Symbol reference ${symbolId} is missing from the model.`, { symbolId });
@@ -624,18 +682,55 @@ function nameForReferencedSymbol(context: RenderContext, symbolId: TypeModelSymb
     return nameForSymbol(context, symbolId);
   }
   const packageName = externalPackageName(symbol.id);
-  const localName = nameForSymbol(context, symbolId);
-  if (!packageName || isAmbientExternalPackage(packageName)) return symbol.name;
+  const qualifiedPath = qualifiedExternalReferencePath(displayText, symbol.name);
+  if (!packageName || isAmbientExternalPackage(packageName)) {
+    return qualifiedPath?.join(".") ?? symbol.name;
+  }
+  if (qualifiedPath) {
+    const [importedRoot, ...members] = qualifiedPath;
+    const localRoot = registerExternalImport(context, packageName, importedRoot);
+    return [localRoot, ...members].join(".");
+  }
   if (!isIdentifier(symbol.name) || symbol.name === "default") {
     warn(context, "external-import-unresolved", `Could not infer a named type import for external symbol ${symbol.name}.`, {
       symbolId,
     });
     return printableDisplayTextForSymbol(symbol);
   }
+  const localName = registerExternalImport(context, packageName, symbol.name);
+  context.localNames.set(symbolId, localName);
+  return localName;
+}
+
+function registerExternalImport(
+  context: RenderContext,
+  packageName: string,
+  importedName: string,
+): string {
   const imports = context.externalImports.get(packageName) ?? new Map<string, ExternalImport>();
-  imports.set(`${symbol.name}:${localName}`, { importedName: symbol.name, localName });
+  const existing = imports.get(importedName);
+  if (existing) return existing.localName;
+
+  let localName = importedName;
+  let suffix = 2;
+  while (context.usedNames.has(localName)) localName = `${importedName}_${suffix++}`;
+  context.usedNames.add(localName);
+  imports.set(importedName, { importedName, localName });
   context.externalImports.set(packageName, imports);
   return localName;
+}
+
+function qualifiedExternalReferencePath(
+  displayText: string | undefined,
+  symbolName: string,
+): string[] | undefined {
+  if (!displayText) return undefined;
+  const match = displayText.trim().match(
+    /^([A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+)(?=\s*(?:<|\[|$))/,
+  );
+  if (!match) return undefined;
+  const parts = match[1].split(".");
+  return parts.at(-1) === symbolName ? parts : undefined;
 }
 
 function renderExternalImports(context: RenderContext): string[] {

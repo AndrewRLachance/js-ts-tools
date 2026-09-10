@@ -11,11 +11,15 @@ const JSPath = require("jspath") as {
 
 // stream-json also commonly needs isolated typing in TS projects.
 const { parser } = require("stream-json") as {
-  parser: () => NodeJS.ReadWriteStream;
+  parser: {
+    asStream: () => NodeJS.ReadWriteStream;
+  };
 };
 
 const { streamArray } = require("stream-json/streamers/stream-array.js") as {
-  streamArray: () => NodeJS.ReadWriteStream;
+  streamArray: {
+    asStream: () => NodeJS.ReadWriteStream;
+  };
 };
 
 export interface ApplyJSPathToFilesStreamOptions
@@ -268,7 +272,9 @@ async function* streamJSPathFromLargeArrayFile<T = unknown>(
   const { first = false } = options;
 
   const source = createReadStream(filePath, { encoding: "utf8" });
-  const jsonPipeline = source.pipe(parser()).pipe(streamArray());
+  const jsonPipeline = source
+    .pipe(parser.asStream())
+    .pipe(streamArray.asStream());
 
   try {
     for await (const chunk of jsonPipeline as AsyncIterable<{ value: unknown }>) {

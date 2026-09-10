@@ -37,6 +37,9 @@ expands them.
 | `code-graph` | Build structural and semantic code graphs | JSON |
 | `json-jspath` | Apply JSPath expressions to JSON files | JSON array |
 | `github-js-ts-search` | Download GitHub files importing npm packages | Source snapshots and JSON manifest |
+| `tsquery` | Query or mutate a TypeScript project with TSQuery selectors | JSON matches or mutation report |
+| `convert-ts-pattern` | Convert safe TypeScript conditionals to `ts-pattern` | JSON report |
+| `ast-xpath` | Generate and match XPath 3.1 patterns over TypeScript AST XML | JSON pattern or match report |
 
 ## Shared analysis concepts
 
@@ -138,6 +141,7 @@ code-impact --source <glob> (--symbol <name> [--file <path>] | --file <path>) [o
 | `--test-source <glob>` | Optional test glob. Repeatable. |
 | `--tsconfig <path>` | TypeScript configuration. Default: `tsconfig.json`. |
 | `--exclude <substring>` | Exclude matching paths. Repeatable. |
+| `--max-continuation-bytes <n>` | Maximum cumulative duplicated continuation bytes per file. Default: `16384`; `0` disables conversions that require duplication. |
 | `--symbol <name>` | Simple or qualified symbol name. May appear once. |
 | `--file <path>` | File target, or disambiguator when used with `--symbol`. |
 | `--direction <value>` | `incoming`, `outgoing`, or `both`. Default: `both`. |
@@ -403,9 +407,20 @@ await saveTypeDeclarationsFromModel(
 When a model contains multiple selected modules, pass the exact module id or
 file path as `{ module: "src/index.ts" }`. Successful schema version `3`
 payloads are compiler-derived declaration bundles containing project-local
-dependencies and external package imports. Schema version `2` models and failed
-bundle payloads use a structural fallback and return warnings alongside the
-generated text.
+dependencies and external package imports. Version 2.0 fails closed when the
+selected module has only a schema version `2` structural model or its bundle
+failed. Callers that deliberately accept lossy structural declarations must
+say so explicitly:
+
+```ts
+const approximate = generateTypeDeclarationsFromModel(schemaV2Model, {
+  structuralFallback: "allow",
+});
+```
+
+Structural output carries a fidelity warning when the modeled signatures had
+explicit source annotations. `ExactDeclarationUnavailableError` exposes the
+selected module, schema version, and absent or failed bundle status.
 
 ## `collect-types`
 
@@ -647,13 +662,364 @@ GitHub-wide code search is bounded by GitHub's indexing and result limits.
 Incomplete or truncated queries produce warnings and are recorded in the
 manifest without changing the successful exit status.
 
+## `ast-xpath`
+
+Converts the TypeScript compiler AST to a versioned XML projection, generates
+XPath 3.1 from a marked example, and matches the portable pattern in the same
+or another configured project. XPath supplies structural candidates; portable
+TypeScript checker comparisons then verify bindings, types, and overloads.
+
+### Syntax
+
+```text
+ast-xpath generate --example <file> [options]
+ast-xpath match --pattern <pattern.json> [options]
+ast-xpath run --example <file> [options]
+```
+
+The example must contain exactly one root marker:
+
+```ts
+/* ast-xpath-root */ audit(/* ast-xpath-ignore */ value);
+```
+
+`/* ast-xpath-ignore */` makes the following subtree unconstrained. Paired
+`/* ast-xpath-ignore-start */` and `/* ast-xpath-ignore-end */` markers can
+surround one subtree or contiguous siblings in a collection. Collection spans
+match zero or more candidate nodes while retaining the order of the surrounding
+nodes. Markers must align with complete AST nodes.
+
+### Options
+
+| Option | Value and behavior |
+| --- | --- |
+| `--example <file>` | Marked example file. Required by `generate` and `run`. |
+| `--pattern <file>` | Generated pattern artifact. Required by `match`. |
+| `--tsconfig <path>` | Example config for `generate`/`run`, or target config for `match`. Default: `tsconfig.json`. |
+| `--target-tsconfig <path>` | Separate target config for `run`; defaults to its example config. |
+| `--semantics <strict\|structural>` | Enforce portable semantic facts or skip the semantic pass. Default: `strict`. |
+| `--strictness <exact\|shape>` | `exact` includes identifier and literal values; `shape` generalizes them. Default: `exact`. |
+| `--source <glob>` | Restrict matched project files. Repeatable. |
+| `--exclude <substring>` | Exclude matching paths. Repeatable. |
+| `--include-declarations` | Include declaration files. |
+| `--xml-out <path>` | Write the example AST XML from `generate` or `run`. |
+| `--pattern-out <path>` | Write the generated pattern during `run`. |
+| `--format <json\|text>` | Match report format. Default: `json`. |
+| `--pretty` | Pretty-print JSON. |
+| `--out <path>` | Write the primary pattern or match output. |
+| `--fail-empty` | Exit with status `2` when matching finds nothing. |
+
+The XML schema uses `<ast>/<file>/<node>/<field>/<node>`. Nodes contain stable
+IDs, syntax kinds, source offsets, and identifier/literal values. Fields retain
+their compiler property names, and collection children carry one-based
+indices. Comments, formatting trivia, parent links, compiler caches, symbols,
+and flow metadata are not serialized.
+
+Exact patterns constrain normalized AST shape, field roles, collection order
+and cardinality, identifier/literal values, operators, and modifiers. Shape
+patterns retain the same structure but omit identifier and literal value
+predicates. Both modes generate a retained AST template. Strict semantic mode
+also verifies internal binding topology, portable external symbol identities,
+mutually assignable types, and corresponding resolved overloads. Structural
+semantic mode performs only XPath selection and retained-template alignment.
+
+Version 2 patterns are self-contained. They retain example source and tsconfig
+hashes as provenance, but matching does not reopen the example project.
+Portable semantic facts are materialized in the target TypeScript project and
+checked by its checker. Facts that cannot be represented portably are recorded
+as diagnostics and remain structurally checked. Version 1 patterns remain
+project-anchored and must be regenerated before cross-project use.
+
+JSON matching output contains the pattern, root match records, and this summary:
+
+```ts
+interface AstXPathMatchSummary {
+  filesScanned: number;
+  xpathCandidates: number;
+  semanticRejected: number;
+  matches: number;
+}
+```
+
+### Examples
+
+```bash
+ast-xpath generate \
+  --example patterns/audit-example.ts \
+  --strictness shape \
+  --out patterns/audit.json \
+  --xml-out patterns/audit.xml
+
+ast-xpath match \
+  --pattern patterns/audit.json \
+  --tsconfig tsconfig.json \
+  --source "src/**/*.ts" \
+  --semantics strict \
+  --pretty
+
+ast-xpath run \
+  --example patterns/audit-example.ts \
+  --target-tsconfig ../target-project/tsconfig.json \
+  --source "src/**/*.ts" \
+  --pattern-out patterns/audit.json
+```
+
+The artifact can be moved and the example project removed before matching:
+
+```bash
+cd /path/to/project-b
+ast-xpath match \
+  --pattern /path/to/audit.json \
+  --tsconfig tsconfig.json \
+  --source 'src/**/*.ts'
+```
+
+## `tsquery`
+
+Queries the TypeScript project AST with
+[TSQuery](https://github.com/phenomnomnominal/tsquery) selectors. Query mode
+reports matched source nodes. Mutation mode can delete matches or insert exact
+UTF-8 snippets immediately before or after them. Mutations are previews unless
+`--write` is supplied.
+
+### Syntax
+
+```text
+tsquery <selector> [options]
+```
+
+The selector is required and should normally be quoted so the shell does not
+interpret selector punctuation.
+
+### Options
+
+| Option | Value and behavior |
+| --- | --- |
+| `--tsconfig <path>` | TypeScript project configuration. Default: `tsconfig.json`. |
+| `--source <glob>` | Restrict project source files. Repeatable. Without it, all non-declaration project source files are searched. |
+| `--exclude <substring>` | Exclude paths containing the substring. Repeatable. |
+| `--include-declarations` | Include declaration files such as `.d.ts`. |
+| `--format <format>` | `json` or `text`. Default: `json`. |
+| `--pretty` | Indent JSON output. Invalid with text output. |
+| `--out <path>` | Write the query or mutation report to a file, creating parent directories. |
+| `--fail-empty` | Exit with status `2` when no AST nodes match. |
+| `--delete` | Plan deletion of every matched node. |
+| `--insert-before <text>` | Plan insertion of exact text immediately before every matched node. |
+| `--insert-after <text>` | Plan insertion of exact text immediately after every matched node. |
+| `--insert-before-file <path>` | Read a UTF-8 snippet and insert it before every matched node. |
+| `--insert-after-file <path>` | Read a UTF-8 snippet and insert it after every matched node. |
+| `--write` | Apply a planned mutation to source files. Invalid without a mutation option. |
+| `-h`, `--help` | Print help. |
+
+The five mutation options are mutually exclusive. Without `--write`, source
+files are never changed; the command reports the edits it would apply. Snippet
+text is inserted exactly as provided, without automatic indentation or
+formatting.
+
+Node deletion uses the selected node's source range excluding leading trivia,
+so leading comments and whitespace are preserved. Overlapping deletion ranges
+are coalesced before editing. All project edits are calculated and files are
+checked for concurrent changes before the first source file is written.
+
+By default, declaration files and paths under `node_modules` are not queried.
+`--source` and `--exclude` only filter the source files loaded from the
+selected TypeScript project; they do not create a separate compiler program.
+
+Query output is an array of records with this shape:
+
+```ts
+interface TsQueryMatch {
+  filePath: string;
+  kind: string;
+  start: { line: number; column: number };
+  end: { line: number; column: number };
+  startOffset: number;
+  endOffset: number;
+  text: string;
+}
+```
+
+Lines and columns are 1-based. Offsets are zero-based UTF-16 source offsets,
+matching the TypeScript compiler API.
+
+Text output emits one match per line as
+`file:line:column<TAB>kind<TAB>text`, with embedded newlines escaped as `\n`.
+
+Mutation mode emits a report containing `selector`, `action`, `written`,
+`matchCount`, `editCount`, per-file counts, and the matched-node records.
+
+Nested or overlapping delete matches can therefore produce fewer edits than
+matches.
+
+### Examples
+
+```bash
+# Query calls to fetch.
+tsquery 'CallExpression > Identifier[name="fetch"]' --pretty
+
+# Preview removal of lodash imports from application sources.
+tsquery 'ImportDeclaration:has(StringLiteral[text="lodash"])' \
+  --source "src/**/*.ts" \
+  --delete \
+  --pretty
+
+# Apply the deletion.
+tsquery 'ImportDeclaration:has(StringLiteral[text="lodash"])' \
+  --source "src/**/*.ts" \
+  --delete \
+  --write
+
+# Insert a multi-line snippet before matching methods.
+tsquery 'MethodDeclaration:has(Identifier[name="execute"])' \
+  --source "src/**/*.ts" \
+  --insert-before-file snippets/instrumentation.ts \
+  --write
+```
+
+## `convert-ts-pattern`
+
+Conservatively rewrites supported `switch` statements, `if` chains, and
+conditional expressions as `ts-pattern` match expressions. The command is a
+validated preview by default and changes source files only when `--write` is
+explicitly supplied.
+
+### Syntax
+
+```text
+convert-ts-pattern --source <glob> [options]
+```
+
+### Options
+
+| Option | Value and behavior |
+| --- | --- |
+| `--source <glob>` | Source glob. Required and repeatable. |
+| `--tsconfig <path>` | TypeScript project configuration. Default: `tsconfig.json`. |
+| `--exclude <substring>` | Exclude matching paths. Repeatable. |
+| `--dry-run` | Validate and report conversions without writing; this is the default. |
+| `--write` | Write validated conversions. Mutually exclusive with `--dry-run`. |
+| `--format <format>` | `json` or `text`. Default: `json`. |
+| `--pretty` | Indent JSON output. Invalid with text output. |
+| `--out <path>` | Write the report to a file, creating parent directories. In write mode it may not select a transformed source file. |
+| `-h`, `--help` | Print help. |
+
+### Conversion behavior
+
+The deterministic classifier supports stable identifier/property subjects,
+primitive and enum-member patterns, reversed strict equality, OR groups over
+one subject, heterogeneous identifier-property paths, mixed scalar/object
+unions, fully optional property paths, non-fallthrough switches, and safe
+return/throw or imperative branch shapes. Ordered pattern guards become
+`.with(pattern, guard, handler)`, guarded OR groups use `P.union(...)`, and
+unambiguous guard-only branches become `.when(predicate, handler)`.
+
+Strict inequality becomes `P.not(...)`. Checker-confirmed `typeof` and
+`instanceof` conditions use native `P` patterns. Explicit runtime type checks
+can also be combined with numeric ranges, integer/finite checks, string
+prefix/suffix/inclusion and length predicates, and safe regular-expression
+literals. Coercive or potentially throwing forms remain verbatim guards so
+unexpected runtime inputs retain their original behavior.
+
+Every original fallback is preserved. Safe conditionals without an explicit
+fallback use `.otherwise(() => {})`, `.otherwise(() => undefined)`, or an
+absorbed unmatched continuation. Nested continuations may cross plain blocks
+and conditional branches, but not loop, switch, label, resource-lifetime, or
+exception boundaries. Continuations containing `await` or `yield` remain
+unchanged. Runtime gaps always fall through rather than becoming exhaustive.
+
+For explicit fallbacks, the converter prefers
+`.exhaustive(fallbackHandler)` when the fallback does not read the match subject
+and the installed `ts-pattern` types prove coverage; otherwise it retries with
+`.otherwise(fallbackHandler)`. It never emits a no-argument `.exhaustive()`.
+Imports reuse safe existing aliases or select deterministic file-wide aliases
+such as `matchTsPattern2` and `PTsPattern2` when bindings or nested shadows
+collide.
+
+Loose equality, effectful or ambiguous guards, unsafe missing fallbacks, partially
+optional or computed discriminator paths, escaping control flow,
+async/generator semantics, and scope changes are reported and left unchanged.
+
+The target project must already make `ts-pattern` available to TypeScript
+module resolution. Existing diagnostics are tolerated, but generated edits may
+not introduce new diagnostics. Before write mode changes any file, all changed
+files are checked against the source bytes used to plan the edits.
+
+Accepted outer candidates take priority over overlapping descendants. A
+descendant remains eligible when its outer candidate is rejected. Existing
+`match(...)` expressions are not candidates. Copied shared continuations may
+expose additional original conditionals on a later run, so repeated writes
+converge rather than requiring every nested continuation to change at once.
+
+### Report
+
+JSON is the default format. The report has this shape:
+
+```ts
+interface TsPatternConversionReport {
+  query: {
+    sourceGlob: string[];
+    tsConfigFilePath: string;
+    excludePathIncludes: string[];
+    maxContinuationBytes: number;
+    mode: "dry-run" | "write";
+  };
+  written: boolean;
+  files: Array<{
+    filePath: string;
+    changed: boolean;
+    candidates: TsPatternCandidateReport[];
+  }>;
+  summary: {
+    candidates: number;
+    converted: number;
+    skipped: number;
+    filesChanged: number;
+  };
+}
+```
+
+Candidate records contain 1-based `start` and `end` locations, `kind`, subject,
+dotted `discriminator`, ordered `discriminators`, branch count, action, and an
+optional converted terminator (`otherwise` or `exhaustive`) and `fallbackKind`
+(`explicit`, `implicit-noop`, `implicit-undefined`, or
+`absorbed-continuation`). The singular field
+is retained when exactly one path is present. Skipped candidates include a
+stable `reasonCode`, `reason`, and any diagnostics produced during validation.
+
+Candidate kinds are `switch`, `if-chain`, `scalar-if`, `discriminated-if`,
+`structural-if`, `guard-if`, and `ternary`. Stable skip codes are:
+
+```text
+unsupported-condition, loose-equality, inconsistent-subject,
+inconsistent-discriminator, effectful-subject, unsupported-pattern,
+missing-fallback, switch-fallthrough, default-not-final, outer-control-flow,
+labeled-control-flow, yield, await, unsupported-branch-shape, scope-change,
+binding-collision, unsupported-discriminator, unsupported-guard,
+ambiguous-guard-subject, effectful-guard, overlapping-candidate,
+continuation-too-large, validation-failed
+```
+
+Text output prints each candidate as a location header followed by its subject,
+discriminator, branch count, action, terminator or skip reason, and then a final
+summary line.
+
+### Examples
+
+```bash
+# Validate and print a pretty JSON report without changing source files.
+convert-ts-pattern --source "src/**/*.ts" --pretty
+
+# Apply validated conversions from the configured project.
+convert-ts-pattern --tsconfig tsconfig.json --source "src/**/*.ts" --write
+```
+
 ## Exit statuses
 
 | Status | Meaning |
 | --- | --- |
 | `0` | Command completed successfully, including an empty result unless `--fail-empty` is active. |
 | `1` | Invalid arguments, analysis failure, filesystem failure, invalid JSON, or another runtime error. |
-| `2` | `json-jspath --fail-empty` found no matches. |
+| `2` | `json-jspath`, `tsquery`, or `ast-xpath` with `--fail-empty` found no matches. |
 
 Diagnostics are written to stderr. Machine-readable results are written to
 stdout unless `--out` is supported and supplied.

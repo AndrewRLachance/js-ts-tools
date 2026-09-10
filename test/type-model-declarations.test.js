@@ -9,6 +9,7 @@ const ts = require("typescript");
 
 const {
   extractTypeModel,
+  ExactDeclarationUnavailableError,
   generateTypeDeclarationsFromModel,
   saveTypeDeclarationsFromModel,
 } = require("../dist");
@@ -57,8 +58,35 @@ test("default extraction remains schema v2 without declaration payloads", () => 
   assert.equal("includeDeclarationBundles" in model.project, false);
   assert.equal("declarationBundle" in model.modules[0], false);
 
-  const generated = generateTypeDeclarationsFromModel(model, { banner: false });
+  assert.throws(
+    () => generateTypeDeclarationsFromModel(model, { banner: false }),
+    (error) => error instanceof ExactDeclarationUnavailableError
+      && error.schemaVersion === "2" && error.bundleStatus === "absent",
+  );
+  const generated = generateTypeDeclarationsFromModel(model, { banner: false, structuralFallback: "allow" });
   assert.equal(generated.mode, "structural-fallback");
+  assert.equal(generated.diagnostics.some((item) =>
+    item.code === "structural-annotation-fidelity-not-guaranteed"), true);
+  assertTypeChecks(fixture, generated.text);
+});
+
+test("schema v2 preserves qualified external namespace references", () => {
+  const fixture = createNamespaceFixture();
+  const model = extractTypeModel({
+    sourceGlob: path.join(fixture, "src/index.ts"),
+    tsConfigFilePath: path.join(fixture, "tsconfig.json"),
+  });
+
+  const generated = generateTypeDeclarationsFromModel(model, { banner: false, structuralFallback: "allow" });
+
+  assert.equal(generated.mode, "structural-fallback");
+  assert.match(generated.text, /import type \{ Effect \} from "namespace-lib";/);
+  assert.match(generated.text, /Effect\.Effect<string, never, never>/);
+  assert.match(generated.text, /Effect\.Effect<number, never, never>/);
+  assert.match(generated.text, /export type State<E, R> = \{/);
+  assert.match(generated.text, /readonly current: Effect\.Effect<R, E, never>;/);
+  assert.match(generated.text, /export type Wrapped<E, R> = Effect\.Effect<State<E, R>, never, never>;/);
+  assert.doesNotMatch(generated.text, /: Effect<(?:string|number)>/);
   assertTypeChecks(fixture, generated.text);
 });
 
@@ -81,11 +109,33 @@ test("opt-in extraction records a module-local bundle failure", () => {
   const diagnostic = model.diagnostics.find((item) => item.code === "declaration-bundle-failed");
   assert.ok(diagnostic);
   assert.doesNotMatch(diagnostic.message, new RegExp(escapeRegExp(root)));
+  assert.throws(
+    () => generateTypeDeclarationsFromModel(model),
+    (error) => error instanceof ExactDeclarationUnavailableError
+      && error.schemaVersion === "3" && error.bundleStatus === "failed",
+  );
+});
+
+test("exact declarations preserve source contract aliases and generic syntax", () => {
+  const fixture = createAnnotationFidelityFixture();
+  const model = extractTypeModel({
+    sourceGlob: path.join(fixture, "src/index.ts"),
+    tsConfigFilePath: path.join(fixture, "tsconfig.json"),
+    includeDeclarationBundles: true,
+  });
+
+  const generated = generateTypeDeclarationsFromModel(model, { banner: false });
+  assert.equal(generated.mode, "bundled");
+  assert.match(generated.text, /initialJobState: \(routing: JobRouting, reservedBytes: number\) => PendingJobState/);
+  assert.match(generated.text, /bridge: <E, R>\(value: BridgeState<E, R>\) => EffectLike<R, E>/);
+  assert.match(generated.text, /normalize: \(value: PaddleExport\["json"\]\) => EffectLike<JsonObject, Error>/);
+  assert.doesNotMatch(generated.text, /keyof A|extends \{\}|vitest/u);
+  assertTypeChecks(fixture, generated.text);
 });
 
 test("schema v2 structurally renders self references, values, aliases, and external imports", () => {
   const model = structuralModel();
-  const generated = generateTypeDeclarationsFromModel(model, { banner: false });
+  const generated = generateTypeDeclarationsFromModel(model, { banner: false, structuralFallback: "allow" });
 
   assert.equal(generated.mode, "structural-fallback");
   assert.match(generated.text, /import type \{ ExternalBox \} from "external-box";/);
@@ -109,10 +159,10 @@ test("generation selects modules, reports failed bundles, and saves output", asy
   assert.throws(() => generateTypeDeclarationsFromModel(model), /select one by id or file path/);
   assert.throws(() => generateTypeDeclarationsFromModel(model, { module: "missing.ts" }), /Module not found/);
 
-  const selected = generateTypeDeclarationsFromModel(model, { module: "module:src/model.ts" });
+  const selected = generateTypeDeclarationsFromModel(model, { module: "module:src/model.ts", structuralFallback: "allow" });
   assert.equal(selected.moduleFilePath, "src/model.ts");
   assert.equal(
-    generateTypeDeclarationsFromModel(model, { module: "src/model.ts" }).moduleId,
+    generateTypeDeclarationsFromModel(model, { module: "src/model.ts", structuralFallback: "allow" }).moduleId,
     "module:src/model.ts",
   );
 
@@ -139,7 +189,8 @@ test("generation selects modules, reports failed bundles, and saves output", asy
     message: "fixture bundle failed",
     location: { filePath: "src/model.ts", line: 1, column: 1 },
   });
-  const fallback = generateTypeDeclarationsFromModel(failed);
+  assert.throws(() => generateTypeDeclarationsFromModel(failed), ExactDeclarationUnavailableError);
+  const fallback = generateTypeDeclarationsFromModel(failed, { structuralFallback: "allow" });
   assert.equal(fallback.mode, "structural-fallback");
   assert.equal(fallback.diagnostics[0].code, "declaration-bundle-failed");
   assert.equal(fallback.diagnostics[0].message, "fixture bundle failed");
@@ -148,6 +199,7 @@ test("generation selects modules, reports failed bundles, and saves output", asy
   const outputPath = path.join(root, "nested", "types.d.ts");
   const saved = await saveTypeDeclarationsFromModel(structuralModel(), outputPath, {
     banner: "/* Custom. */",
+    structuralFallback: "allow",
   });
   assert.equal(saved.outputFilePath, outputPath);
   assert.equal(fs.readFileSync(outputPath, "utf8"), saved.text);
@@ -192,7 +244,7 @@ test("schema v2 falls back to displayText and replaces unprintable sentinels", (
     { name: "Unresolved", symbolId: "symbol:unresolved", targetSymbolId: "symbol:unresolved" },
   );
 
-  const generated = generateTypeDeclarationsFromModel(model, { banner: false });
+  const generated = generateTypeDeclarationsFromModel(model, { banner: false, structuralFallback: "allow" });
   assert.match(generated.text, /export type Unsupported = string \| number;/);
   assert.match(generated.text, /export type Unresolved = unknown;/);
   assert.equal(generated.diagnostics.filter((item) => item.code === "display-text-fallback").length, 2);
@@ -228,6 +280,76 @@ export function makeUser(id: string): User { return new User(id, { external: id 
 export { User, Role, makeUser } from "./model";
 export type { Conditional, InferValue, Remapped } from "./model";
 export { User as default } from "./model";
+`);
+  fs.writeFileSync(path.join(root, "tsconfig.json"), JSON.stringify({
+    compilerOptions: {
+      strict: true,
+      target: "ES2022",
+      module: "Node16",
+      moduleResolution: "Node16",
+      declaration: true,
+      skipLibCheck: true,
+    },
+    include: ["src/**/*.ts"],
+  }));
+  return root;
+}
+
+function createNamespaceFixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "type-model-namespace-"));
+  fs.mkdirSync(path.join(root, "src"), { recursive: true });
+  fs.mkdirSync(path.join(root, "node_modules", "namespace-lib"), { recursive: true });
+  fs.writeFileSync(path.join(root, "node_modules", "namespace-lib", "package.json"), JSON.stringify({
+    name: "namespace-lib",
+    version: "1.0.0",
+    types: "index.d.ts",
+  }));
+  fs.writeFileSync(path.join(root, "node_modules", "namespace-lib", "index.d.ts"), `
+export * as Effect from "./Effect";
+`);
+  fs.writeFileSync(path.join(root, "node_modules", "namespace-lib", "Effect.d.ts"), `
+export interface Effect<A, E = never, R = never> {
+  readonly value: A;
+  readonly error: E;
+  readonly requirements: R;
+}
+`);
+  fs.writeFileSync(path.join(root, "src", "index.ts"), `
+import type { Effect } from "namespace-lib";
+export type StringEffect = Effect.Effect<string>;
+export declare const numberEffect: Effect.Effect<number>;
+export interface State<E, R> {
+  readonly current: Effect.Effect<R, E>;
+}
+export type Wrapped<E, R> = Effect.Effect<State<E, R>>;
+`);
+  fs.writeFileSync(path.join(root, "tsconfig.json"), JSON.stringify({
+    compilerOptions: {
+      strict: true,
+      target: "ES2022",
+      module: "Node16",
+      moduleResolution: "Node16",
+      declaration: true,
+      skipLibCheck: true,
+    },
+    include: ["src/**/*.ts"],
+  }));
+  return root;
+}
+
+function createAnnotationFidelityFixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "type-model-annotation-fidelity-"));
+  fs.mkdirSync(path.join(root, "src"), { recursive: true });
+  fs.writeFileSync(path.join(root, "src", "index.ts"), `
+export interface JobRouting { readonly messageId: string; readonly receiptHandle: string; readonly jobId: string }
+export interface PendingJobState { readonly routing: JobRouting; readonly reservedBytes: number }
+export interface BridgeState<E, R> { readonly error: E; readonly request: R }
+export interface JsonObject { readonly [key: string]: unknown }
+export interface PaddleExport { readonly json: JsonObject | string }
+export interface EffectLike<A, E = never, R = never> { readonly value: A; readonly error: E; readonly context: R }
+export const initialJobState = (routing: JobRouting, reservedBytes: number): PendingJobState => ({ routing, reservedBytes });
+export const bridge = <E, R>(value: BridgeState<E, R>): EffectLike<R, E> => ({ value: value.request, error: value.error, context: undefined as never });
+export const normalize = (value: PaddleExport["json"]): EffectLike<JsonObject, Error> => ({ value: typeof value === "string" ? {} : value, error: new Error(), context: undefined as never });
 `);
   fs.writeFileSync(path.join(root, "tsconfig.json"), JSON.stringify({
     compilerOptions: {

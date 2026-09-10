@@ -12,6 +12,6 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "src/templates/effect-application-templates.ts", "src/templates/e-samplesBasePatterns.mts"],
   "exclude": ["node_modules", "dist", "junk"]
 }

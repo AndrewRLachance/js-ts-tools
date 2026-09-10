@@ -1,6 +1,6 @@
 {
   "name": "js-ts-tools",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "",
   "type": "commonjs",
   "main": "./dist/index.js",
@@ -15,7 +15,10 @@
     "create-project": "./bin/create-project-cli.js",
     "code-graph": "./bin/graph-api-cli.js",
     "json-jspath": "./bin/json-jspath-cli.js",
-    "github-js-ts-search": "./bin/github-js-ts-search-cli.js"
+    "github-js-ts-search": "./bin/github-js-ts-search-cli.js",
+    "tsquery": "./bin/tsquery-cli.js",
+    "convert-ts-pattern": "./bin/convert-ts-pattern-cli.js",
+    "ast-xpath": "./bin/ast-xpath-cli.js"
   },
   "files": [
     "dist",
@@ -38,6 +41,9 @@
   "license": "ISC",
   "dependencies": {
     "@aws-sdk/types": "^3.973.12",
+    "@effect/platform": "^0.97.2",
+    "@effect/platform-node": "^0.108.2",
+    "@phenomnomnominal/tsquery": "^6.2.0",
     "@types/aws-api-gateway-client": "^0.3.3",
     "@types/aws-cloudfront-function": "^1.0.8",
     "@types/aws-kcl": "^2.0.5",
@@ -49,18 +55,23 @@
     "@types/mysql": "^2.15.27",
     "@types/pg": "^8.20.0",
     "dts-bundle-generator": "^9.5.1",
+    "effect": "^3.22.2",
     "fast-glob": "^3.3.3",
+    "fontoxpath": "^3.34.0",
     "jspath": "^0.4.0",
     "openapi-fetch": "^0.17.0",
+    "slimdom": "^4.3.5",
     "stream-json": "^3.4.0",
-    "ts-morph": "^28.0.0"
+    "synthesize-regions": "file:../templating/synthesize-regions",
+    "ts-morph": "^28.0.0",
+    "typescript": "^5.9.3"
   },
   "devDependencies": {
     "@types/jspath": "^0.4.2",
     "@types/node": "^25.9.4",
     "openapi-typescript": "^7.13.0",
     "ts-morph-associated-declarations": "file:external-packages/ts-morph-associated-declarations-0.1.0.tgz",
-    "tsx": "^4.22.4",
-    "typescript": "^5.9.3"
+    "ts-pattern": "^5.9.0",
+    "tsx": "^4.22.4"
   }
 }
