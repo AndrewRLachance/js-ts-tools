@@ -10,8 +10,21 @@
     "strict": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "plugins": [
+      {
+        "name": "@effect/language-service"
+      }
+    ]
   },
-  "include": ["src/**/*.ts", "src/templates/effect-application-templates.ts", "src/templates/e-samplesBasePatterns.mts"],
-  "exclude": ["node_modules", "dist", "junk"]
+  "include": [
+    "src/**/*.ts",
+    "src/templates/effect-application-templates.ts",
+    "src/templates/e-samplesBasePatterns.mts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "junk"
+  ]
 }
