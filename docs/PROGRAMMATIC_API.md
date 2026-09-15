@@ -24,6 +24,8 @@ The package root, `js-ts-tools`, is the stable public API. Any section that uses
 - [`github-js-ts-search`](#github-js-ts-search)
 - [`ast-xpath`](#ast-xpath)
 - [`convert-ts-pattern`](#convert-ts-pattern)
+- [`conditional-to-effect-schema-v3`](#conditional-to-effect-schema-v3)
+- [`effect-v3-codemod`](#effect-v3-codemod)
 - [CLI Compatibility APIs](#cli-compatibility-apis)
 - [`tsquery`](#tsquery)
 - [Implementation-Dependent Subpath APIs](#implementation-dependent-subpath-apis)
@@ -121,6 +123,8 @@ console.log(formatContextPack(pack, { format: "markdown" }));
 | Package import parser | `findPackageReferences`, `importsAnyPackage` | `js-ts-tools` | Parse already-loaded source text for npm imports | Sync | No | No | No |
 | `github-js-ts-search` | `searchGitHubPackageImports` | `js-ts-tools` | Search GitHub code and save matching source blobs | Async | No local project reads | Yes | GitHub API |
 | `ast-xpath` | `generateAstXPathPattern`, `matchAstXPathPattern`, `readAstXPathPattern`, `runAstXPath`, `serializeAstToXml` | `js-ts-tools` | Generate and match XPath 3.1 patterns over TypeScript AST XML | Sync | Yes | No | No |
+| `effect-v3-codemod` | `runEffectCodemod`, `effectCodemod` | `js-ts-tools` | Convert proven idioms to Effect v3 operators | Sync | Yes | Only with `write: true` | No |
+| `conditional-to-effect-schema-v3` | `convertConditionalToEffectSchemaV3` | `js-ts-tools` | Generate Effect v3 Schema refinements | Sync | Yes | No | No |
 | `convert-ts-pattern` | `convertTsPattern`, `DEFAULT_MAX_CONTINUATION_BYTES` | `js-ts-tools` | Safely preview or apply `ts-pattern` conversions | Sync | Yes | Optional with `write: true` | No |
 | `tsquery` query | `collectMatches` | `js-ts-tools` | Query a TypeScript project with TSQuery selectors | Sync | Yes | No | No |
 | `tsquery` CLI compatibility | `parseArgs`, `run`, `main`, `applyTextEdits`, `coalesceDeleteEdits`, `globToRegExp` | `js-ts-tools` | Parse CLI-style options, emit formatted output, and optionally mutate files | Sync | Yes | Optional output/source writes | No |
@@ -741,6 +745,7 @@ console.log(generated.mode, generated.diagnostics);
 | `scope` | `"exports" \| "all"` | `"exports"` | Root exported symbols only, or all top-level symbols. |
 | `includeCallSites` | `boolean` | `false` | Include resolved call-like expressions. |
 | `includeDeclarationBundles` | `boolean` | `false` | Include compiler-derived `.d.ts` bundles and return schema version `3`. |
+| `sourceTextOverrides` | `ReadonlyMap<string, string>` | None | Analyze replacement text for existing project files without writing. Paths resolve against `cwd`; cannot be combined with declaration bundles. |
 | `cwd` | `string` | `process.cwd()` | Base directory for relative tsconfig and source-glob resolution. |
 
 `GenerateTypeDeclarationsOptions`
@@ -1582,3 +1587,83 @@ Top-level JSON arrays are streamed item by item. The JSPath expression is applie
 #### Path Resolution
 
 `findJsonFiles`, `applyJSPathToFiles`, `applyJSPathToFilesStream`, and `forEachJSPathInFiles` resolve relative globs from `cwd`. `readJsonFile` and `streamJSPathFromFile` use the path supplied by the caller.
+
+
+<a id="conditional-to-effect-schema-v3"></a>
+
+## `conditional-to-effect-schema-v3`
+
+```ts
+import { convertConditionalToEffectSchemaV3 } from "js-ts-tools";
+
+const result = convertConditionalToEffectSchemaV3({
+  cwd: "/path/to/project",
+  sourceGlob: "src/**/*.ts",
+  tsConfigFilePath: "tsconfig.json",
+  target: "validateOrder",
+  baseSchema: "OrderBase",
+  mode: "auto",
+});
+console.log(result.code);
+```
+
+`ConvertConditionalToEffectSchemaV3Options` requires `target`, `baseSchema` and `sourceGlob` (a string or array). Optional fields are `schemaName`, `tsConfigFilePath`, `excludePathIncludes`, `cwd`, `mode` (default `static`), `maxCallDepth` (default `12`) and `allowOpaqueCalls` (default `false`). Paths resolve against `cwd` or the process working directory.
+
+`ConvertConditionalToEffectSchemaV3Result` contains the chosen `mode`, resolved `target`, `schemaName`, generated `code`, `constraints` and `diagnostics`. Each `ThrowConstraint` contains success/failure predicates, a message, original throw expression, source file, line and call path. Each `ConversionDiagnostic` has a code, message and optional source location. These types and `ConversionMode` are exported from the package root.
+
+See the [CLI semantics and limitations](CLI_API.md#conditional-to-effect-schema-v3) for supported static constructs, runtime fallback and the scope required by the generated snippet. Unsupported static conversions throw an error; use `mode: "auto"` to receive a wrapper and diagnostics instead where synchronous wrapping is possible.
+
+
+<a id="effect-v3-codemod"></a>
+
+## `effect-v3-codemod`
+
+```ts
+import { runEffectCodemod } from "js-ts-tools";
+const report = runEffectCodemod({
+  cwd: "/path/to/project",
+  sources: ["src/**/*.ts"],
+  targets: ["map", "asVoid"],
+  write: false,
+});
+```
+
+`EffectCodemodOptions` accepts `cwd`, `tsconfig`, `sources`, `excludes`, `targets`, `write`, `includeReview`, `maxPasses` (1–10, default 3) and `evidence` (`"compact"` by default, or `"full"`). The default target set covers all production rules. `EffectCodemodReport` contains candidate decisions, planned file replacements, summary counts, grouped skip reasons and validation diagnostics. Candidate records include source line and column, their input pass, reason codes and proof obligations. `passes` contains per-pass attempts; summary fields expose convergence and the stop reason. Failed validation returns `validation.ok: false` and prevents commit; argument and I/O errors throw.
+
+Advanced consumers can use the `effectCodemod` namespace for the dependency-injected pipeline, registry, individual rules and adapters. See [Effect codemod](EFFECT_CODEMOD.md) for defaults, in-memory validation and supported transformations.
+
+### Shared code analysis session
+
+`createCodeAnalysisSession({ root, sources: [{ filePath, text }], compilerOptions? })`
+creates one in-memory TypeScript project. Only supplied source files and bundled
+TypeScript libraries resolve; callers control configuration and source inventory.
+No candidate dependency installation, compiler plugins, or host filesystem reads
+occur. `analysisTypeScript` exposes the compiler used by the session (which may
+differ from the package's standalone TypeScript dependency).
+
+Use `nodeAt({ filePath, start, end, sourceFile? })` with UTF-16 offsets and
+`slice(range, { maxDepth: 2, maxNodes: 50 })` to select the enclosing declaration,
+not the referenced callee. Source-file ranges select top-level declarations.
+A range without a sliceable declaration returns no slice. Use selected/boundary
+IDs with `graphs(ids)`, `patterns(ids)`, and `declaration(id)`; use `types(nodes)`
+for targeted type extraction (`targetTypes` contains ordered type roots).
+Graphs and pattern detections are cached within the session. `stats` exposes
+project, graph construction, and pattern invocation counts for instrumentation.
+Existing standalone APIs retain their behavior.
+
+Reports and nodes may contain source and absolute paths. Consumers with metadata
+retention requirements must normalize these before storage or transmission.
+
+### Effect-schema refactor completion
+
+The Effect-schema adapter previews the installed language-service plugin's
+Structural Type to Schema refactor and validates the complete edited project
+before applying it. Some plugin releases, including 0.87.2, emit schema classes
+as insertions without deleting the selected interface/type alias or supplying
+its runtime `Schema` import. The adapter completes those edits: a generated class
+replaces its selected declaration, existing runtime import aliases are reused,
+and missing/type-only/shadowed bindings receive a fresh runtime import. Generated
+references alone are renamed; existing user code is preserved. Default exports,
+leading comments, CRLF text, and original UTF-16 edit coordinates are retained.
+The plugin remains responsible for schema generation, including reuse of existing
+schemas. Apply checks project freshness and compiler validation before writing.

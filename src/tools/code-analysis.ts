@@ -65,6 +65,8 @@ export interface CodeAnalysisWorkspace {
   edges: AnalysisEdge[];
   outgoing: Map<string, AnalysisEdge[]>;
   incoming: Map<string, AnalysisEdge[]>;
+  callGraph: ReturnType<typeof buildCallGraphFromSourceFiles>;
+  definitionUseGraph: ReturnType<typeof buildDefinitionUseGraphFromSourceFiles>;
   normalizeId(id: string): string;
 }
 
@@ -108,6 +110,20 @@ export function createCodeAnalysisWorkspace(
     if (!selectedPaths.has(sourceFile.getFilePath())) project.removeSourceFile(sourceFile);
   }
 
+  return createCodeAnalysisWorkspaceFromProject(project, sourceFiles, { cwd, tsConfigFilePath, sourceGlobs, testGlobs, exclusions, explicitTestPaths });
+}
+
+/** Reuses a caller-owned project; no disk reads or additional projects. */
+export function createCodeAnalysisWorkspaceFromProject(
+  project: Project, sourceFiles: SourceFile[],
+  options: { cwd: string; tsConfigFilePath: string; sourceGlobs?: string[]; testGlobs?: string[]; exclusions?: string[]; explicitTestPaths?: Set<string> },
+): CodeAnalysisWorkspace {
+  const { cwd, tsConfigFilePath } = options;
+  const sourceGlobs = options.sourceGlobs ?? sourceFiles.map(f => f.getFilePath());
+  const testGlobs = options.testGlobs ?? [];
+  const exclusions = options.exclusions ?? [];
+  const explicitTestPaths = options.explicitTestPaths ?? new Set<string>();
+  const selectedPaths = new Set<string>(sourceFiles.map(f => f.getFilePath()));
   const index = buildDeclarationIndex(sourceFiles, explicitTestPaths);
   const aliasToCanonical = new Map<string, string>();
   const nodes = new Map<string, ImpactNode>();
@@ -194,6 +210,8 @@ export function createCodeAnalysisWorkspace(
     explicitTestPaths,
     index,
     nodes,
+    callGraph,
+    definitionUseGraph,
     edges: uniqueEdges,
     outgoing: groupEdges(uniqueEdges, "fromId"),
     incoming: groupEdges(uniqueEdges, "toId"),

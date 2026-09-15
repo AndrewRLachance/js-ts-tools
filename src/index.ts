@@ -1,6 +1,9 @@
 export { buildGraphs } from './tools/graph-api'
-export type { SourceOptions, TargetOptions } from './tools/graph-api'
+export { analyzeCodeImpact } from './tools/code-impact'
+export { createCodeSlice, formatCodeSlice } from './tools/code-slice'
 export { createContextPack, estimateContextPackTokens, formatContextPack } from './tools/context-pack'
+
+export type { SourceOptions, TargetOptions } from './tools/graph-api'
 export type {
 	ContextChunkKind,
 	ContextOmission,
@@ -13,7 +16,6 @@ export type {
 	FormatContextPackOptions,
 	RankedContextSeed
 } from './tools/context-pack'
-export { analyzeCodeImpact } from './tools/code-impact'
 export type {
 	AnalyzeCodeImpactOptions,
 	ImpactDirection,
@@ -24,7 +26,6 @@ export type {
 	ImpactReport,
 	ImpactedNode
 } from './tools/code-impact'
-export { createCodeSlice, formatCodeSlice } from './tools/code-slice'
 export type {
 	CodeSliceFormat,
 	CodeSliceLocation,
@@ -209,3 +210,26 @@ export type {
 	AstXPathCliOptions,
 	AstXPathOutputFormat
 } from './tools/ast-xpath-cli'
+
+export { convertConditionalToEffectSchemaV3 } from './tools/conditional-to-effect-schema-v3'
+export type {
+  ConversionMode,
+  ConversionDiagnostic,
+  ThrowConstraint,
+  ConvertConditionalToEffectSchemaV3Options,
+  ConvertConditionalToEffectSchemaV3Result,
+} from './tools/conditional-to-effect-schema-v3'
+
+export { runEffectCodemod } from './tools/effect-v3-codemod'
+export type { EffectCodemodOptions, EffectCodemodReport } from './tools/effect-v3-codemod'
+export type { EffectTarget } from './tools/effect-codemod/contracts/effect-target'
+export * as effectCodemod from './tools/effect-codemod'
+
+export { createEffectSchemaSession } from './tools/effect-schema'
+export type * from './tools/effect-schema/contracts'
+export { EFFECT_SCHEMA_HELP, parseEffectSchemaArgs, mainEffectSchema } from './tools/effect-schema-cli'
+export type { EffectSchemaCliOptions, EffectSchemaCliIO } from './tools/effect-schema-cli'
+
+export { createCodeAnalysisSession } from "./tools/code-analysis-session";
+export type { CodeAnalysisSession, CodeAnalysisSessionOptions, AnalysisRange } from "./tools/code-analysis-session";
+export { ts as analysisTypeScript } from "ts-morph";

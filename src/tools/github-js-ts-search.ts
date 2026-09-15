@@ -6,14 +6,24 @@ import { ts } from "ts-morph";
 const API = "https://api.github.com";
 const API_ORIGIN = new URL(API).origin;
 const API_VERSION = "2026-03-10";
-const EXTENSIONS = ["js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts"] as const;
+const EXTENSIONS = [
+  "js",
+  "jsx",
+  "mjs",
+  "cjs",
+  "ts",
+  "tsx",
+  "mts",
+  "cts",
+] as const;
 const PER_PAGE = 100;
 const MAX_SEARCH_PAGES = 10;
 const DEFAULT_MAX_ATTEMPTS = 5;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const MAX_ERROR_BODY_LENGTH = 1_000;
 const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/;
-const REPOSITORY_FULL_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+const REPOSITORY_FULL_NAME =
+  /^[A-Za-z0-9][A-Za-z0-9_.-]*\/(?!\.{1,2}$)[A-Za-z0-9_.-]+$/;
 const BLOB_SHA = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 
 type SearchHit = {
@@ -48,6 +58,10 @@ export interface SearchGitHubPackageImportsOptions {
   signal?: AbortSignal;
   maxAttempts?: number;
   requestTimeoutMs?: number;
+  /** Maximum pages per package/extension query; defaults to 10. */
+  maxSearchPages?: number;
+  /** Maximum distinct repository/path/blob candidates selected before download. */
+  maxCandidates?: number;
 }
 
 export interface GitHubPackageImportQueryStatus {
@@ -75,6 +89,13 @@ export interface GitHubPackageImportSearchReport {
   outputDirectory: string;
   manifestPath: string;
   candidateCount: number;
+  selection?: {
+    maxSearchPages: number;
+    maxCandidates?: number;
+    selectedCandidateCount: number;
+    omittedCandidateCount: number;
+    candidateLimitReached: boolean;
+  };
   savedFileCount: number;
   hasIncompleteQueries: boolean;
   queries: GitHubPackageImportQueryStatus[];
@@ -151,7 +172,11 @@ function isTypeOnlyImport(node: ts.ImportDeclaration): boolean {
   const clause = node.importClause;
   if (!clause) return false;
   if (clause.isTypeOnly) return true;
-  if (clause.name || !clause.namedBindings || !ts.isNamedImports(clause.namedBindings)) {
+  if (
+    clause.name ||
+    !clause.namedBindings ||
+    !ts.isNamedImports(clause.namedBindings)
+  ) {
     return false;
   }
   return (
@@ -176,13 +201,17 @@ function bindSourceFile(sourceFile: ts.SourceFile): ts.TypeChecker {
     writeFile: () => undefined,
   };
   return ts
-    .createProgram([sourceFile.fileName], {
-      allowJs: true,
-      checkJs: true,
-      noLib: true,
-      noResolve: true,
-      skipLibCheck: true,
-    }, compilerHost)
+    .createProgram(
+      [sourceFile.fileName],
+      {
+        allowJs: true,
+        checkJs: true,
+        noLib: true,
+        noResolve: true,
+        skipLibCheck: true,
+      },
+      compilerHost,
+    )
     .getTypeChecker();
 }
 
@@ -203,7 +232,10 @@ export function findPackageReferences(
   const references: PackageReference[] = [];
   const seen = new Set<string>();
 
-  const addReference = (specifier: string, kind: PackageReferenceKind): void => {
+  const addReference = (
+    specifier: string,
+    kind: PackageReferenceKind,
+  ): void => {
     for (const packageName of matchingPackages(specifier, normalizedPackages)) {
       const key = `${packageName}\0${specifier}\0${kind}`;
       if (seen.has(key)) continue;
@@ -266,11 +298,19 @@ function validateRepositoryPath(path: string): string[] {
     path.includes("\\") ||
     path.includes("\0")
   ) {
-    throw new Error(`GitHub returned an unsafe repository path: ${JSON.stringify(path)}`);
+    throw new Error(
+      `GitHub returned an unsafe repository path: ${JSON.stringify(path)}`,
+    );
   }
   const segments = path.split("/");
-  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
-    throw new Error(`GitHub returned an unsafe repository path: ${JSON.stringify(path)}`);
+  if (
+    segments.some(
+      (segment) => segment === "" || segment === "." || segment === "..",
+    )
+  ) {
+    throw new Error(
+      `GitHub returned an unsafe repository path: ${JSON.stringify(path)}`,
+    );
   }
   return segments;
 }
@@ -305,7 +345,9 @@ function parseSearchResponse(value: unknown): SearchResponse {
     }
     validateRepositoryPath(item.path);
     if (!BLOB_SHA.test(item.sha)) {
-      throw new Error(`GitHub returned an invalid blob SHA: ${JSON.stringify(item.sha)}`);
+      throw new Error(
+        `GitHub returned an invalid blob SHA: ${JSON.stringify(item.sha)}`,
+      );
     }
     assertGitHubUrl(item.git_url);
 
@@ -393,7 +435,11 @@ function retryAfterMilliseconds(response: Response): number | undefined {
   return undefined;
 }
 
-function boundedBackoff(base: number, attempt: number, maximum: number): number {
+function boundedBackoff(
+  base: number,
+  attempt: number,
+  maximum: number,
+): number {
   return Math.min(maximum, base * 2 ** Math.max(0, attempt - 1));
 }
 
@@ -429,7 +475,12 @@ async function githubFetch(
     throwIfAborted(options.signal);
     const requestController = new AbortController();
     const timeout = setTimeout(
-      () => requestController.abort(new Error(`GitHub request timed out after ${options.requestTimeoutMs}ms.`)),
+      () =>
+        requestController.abort(
+          new Error(
+            `GitHub request timed out after ${options.requestTimeoutMs}ms.`,
+          ),
+        ),
       options.requestTimeoutMs,
     );
     const onAbort = (): void => requestController.abort(options.signal?.reason);
@@ -438,7 +489,10 @@ async function githubFetch(
 
     try {
       const response = await fetch(url, {
-        headers: headers(options.token, options.accept ?? "application/vnd.github+json"),
+        headers: headers(
+          options.token,
+          options.accept ?? "application/vnd.github+json",
+        ),
         signal: requestController.signal,
       });
       const body = await response.text();
@@ -448,18 +502,20 @@ async function githubFetch(
       let retryDelay: number | undefined;
 
       const headerDelay = retryAfterMilliseconds(response);
-      const isSecondaryLimit = /secondary rate limit|abuse detection/i.test(body);
+      const isSecondaryLimit = /secondary rate limit|abuse detection/i.test(
+        body,
+      );
       if (
         response.status === 429 ||
-        (response.status === 403 && (headerDelay !== undefined || isSecondaryLimit))
+        (response.status === 403 &&
+          (headerDelay !== undefined || isSecondaryLimit))
       ) {
         retryDelay = headerDelay;
         if (retryDelay === undefined) {
           retryDelay = boundedBackoff(60_000, attempt, 300_000);
         }
       } else if (response.status >= 500 && response.status <= 599) {
-        retryDelay =
-          headerDelay ?? boundedBackoff(1_000, attempt, 30_000);
+        retryDelay = headerDelay ?? boundedBackoff(1_000, attempt, 30_000);
       }
 
       if (!canRetry || retryDelay === undefined) {
@@ -468,7 +524,10 @@ async function githubFetch(
       await sleep(retryDelay, options.signal);
     } catch (error) {
       if (options.signal?.aborted) throwIfAborted(options.signal);
-      if (error instanceof Error && error.message.startsWith("GitHub request failed")) {
+      if (
+        error instanceof Error &&
+        error.message.startsWith("GitHub request failed")
+      ) {
         throw error;
       }
       lastError = error;
@@ -508,6 +567,7 @@ async function searchQuery(
   packageName: string,
   extension: string,
   requestOptions: RequestOptions,
+  maxSearchPages: number,
 ): Promise<{ status: GitHubPackageImportQueryStatus; hits: SearchHit[] }> {
   const query = `"${packageName}" extension:${extension}`;
   const initialUrl = new URL(`${API}/search/code`);
@@ -522,16 +582,19 @@ async function searchQuery(
   let page = 0;
   let hasNextPage = false;
 
-  while (currentUrl && page < MAX_SEARCH_PAGES) {
+  while (currentUrl && page < maxSearchPages) {
     page += 1;
     const githubResponse = await githubFetch(currentUrl, requestOptions);
     let parsed: unknown;
     try {
       parsed = JSON.parse(githubResponse.body);
     } catch (error) {
-      throw new Error("GitHub returned invalid JSON for a code search response.", {
-        cause: error,
-      });
+      throw new Error(
+        "GitHub returned invalid JSON for a code search response.",
+        {
+          cause: error,
+        },
+      );
     }
     const result = parseSearchResponse(parsed);
     totalCount = Math.max(totalCount, result.totalCount);
@@ -548,7 +611,7 @@ async function searchQuery(
       extension,
       totalCount,
       fetchedCount,
-      truncated: totalCount > PER_PAGE * MAX_SEARCH_PAGES || hasNextPage,
+      truncated: totalCount > PER_PAGE * maxSearchPages || hasNextPage,
       incomplete,
     },
     hits: [...hits.values()],
@@ -570,7 +633,12 @@ function safeOutputPath(
   const repositoryParts = hit.repository.split("/");
   const pathParts = validateRepositoryPath(hit.path);
   const filesRoot = resolve(outputDirectory, "files");
-  const absolute = resolve(filesRoot, ...repositoryParts, hit.sha, ...pathParts);
+  const absolute = resolve(
+    filesRoot,
+    ...repositoryParts,
+    hit.sha,
+    ...pathParts,
+  );
   const relativeToRoot = relative(filesRoot, absolute);
   if (
     relativeToRoot === "" ||
@@ -586,7 +654,10 @@ function safeOutputPath(
   };
 }
 
-async function writeFileAtomically(path: string, contents: string): Promise<void> {
+async function writeFileAtomically(
+  path: string,
+  contents: string,
+): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const temporaryPath = join(
     dirname(path),
@@ -628,10 +699,28 @@ export async function searchGitHubPackageImports(
   const packages = normalizePackages(options.packages);
   const token = options.token?.trim();
   if (!token) throw new Error("A GitHub access token is required.");
-  if (options.outputDirectory !== undefined && options.outputDirectory.trim() === "") {
+  if (
+    options.outputDirectory !== undefined &&
+    options.outputDirectory.trim() === ""
+  ) {
     throw new Error("outputDirectory must not be empty.");
   }
 
+  const maxSearchPages = positiveInteger(
+    options.maxSearchPages,
+    MAX_SEARCH_PAGES,
+    "maxSearchPages",
+    MAX_SEARCH_PAGES,
+  );
+  const maxCandidates =
+    options.maxCandidates === undefined
+      ? undefined
+      : positiveInteger(
+          options.maxCandidates,
+          1,
+          "maxCandidates",
+          Number.MAX_SAFE_INTEGER,
+        );
   const outputDirectory = resolve(options.outputDirectory ?? "downloads");
   const requestOptions: RequestOptions = {
     token,
@@ -650,19 +739,65 @@ export async function searchGitHubPackageImports(
   };
   const candidates = new Map<string, SearchHit>();
   const queries: GitHubPackageImportQueryStatus[] = [];
+  const queues: { key: string; hits: SearchHit[]; index: number }[] = [];
 
   for (const packageName of packages) {
     for (const extension of EXTENSIONS) {
-      const result = await searchQuery(packageName, extension, requestOptions);
+      const result = await searchQuery(
+        packageName,
+        extension,
+        requestOptions,
+        maxSearchPages,
+      );
       queries.push(result.status);
+      queues.push({
+        key: `${packageName}\0${extension}`,
+        hits: result.hits.sort(compareHits),
+        index: 0,
+      });
       for (const hit of result.hits) candidates.set(hitKey(hit), hit);
     }
   }
 
+  let selected = [...candidates.values()];
+  if (maxCandidates !== undefined) {
+    const chosen = new Map<string, SearchHit>();
+    queues.sort((a, b) => a.key.localeCompare(b.key));
+    let progress = true;
+    while (chosen.size < maxCandidates && progress) {
+      progress = false;
+      for (const queue of queues) {
+        while (
+          queue.index < queue.hits.length &&
+          chosen.has(hitKey(queue.hits[queue.index]))
+        )
+          queue.index++;
+        if (queue.index < queue.hits.length) {
+          const hit = queue.hits[queue.index++];
+          chosen.set(hitKey(hit), hit);
+          progress = true;
+          if (chosen.size === maxCandidates) break;
+        }
+      }
+    }
+    selected = [...chosen.values()];
+  }
+  const omittedCandidateCount = candidates.size - selected.length;
+  const selection =
+    options.maxCandidates === undefined && options.maxSearchPages === undefined
+      ? undefined
+      : {
+          maxSearchPages,
+          ...(maxCandidates === undefined ? {} : { maxCandidates }),
+          selectedCandidateCount: selected.length,
+          omittedCandidateCount,
+          candidateLimitReached: omittedCandidateCount > 0,
+        };
+
   const sourceBySha = new Map<string, string>();
   const matches: GitHubPackageImportMatch[] = [];
 
-  for (const hit of [...candidates.values()].sort(compareHits)) {
+  for (const hit of selected.sort(compareHits)) {
     throwIfAborted(options.signal);
     let source = sourceBySha.get(hit.sha);
     if (source === undefined) {
@@ -697,12 +832,18 @@ export async function searchGitHubPackageImports(
     outputDirectory,
     manifestPath,
     candidateCount: candidates.size,
+    ...(selection ? { selection } : {}),
     savedFileCount: matches.length,
-    hasIncompleteQueries: queries.some((query) => query.incomplete || query.truncated),
+    hasIncompleteQueries:
+      omittedCandidateCount > 0 ||
+      queries.some((query) => query.incomplete || query.truncated),
     queries,
     matches,
   };
 
-  await writeFileAtomically(manifestPath, `${JSON.stringify(report, null, 2)}\n`);
+  await writeFileAtomically(
+    manifestPath,
+    `${JSON.stringify(report, null, 2)}\n`,
+  );
   return report;
 }

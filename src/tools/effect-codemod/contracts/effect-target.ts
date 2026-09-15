@@ -1,0 +1,67 @@
+export const EFFECT_TARGETS = {
+  collecting: [
+    "all",
+    "allSuccesses",
+    "allWith",
+    "dropUntil",
+    "dropWhile",
+    "findFirst",
+    "head",
+    "mergeAll",
+    "reduce",
+    "reduceEffect",
+    "reduceRight",
+    "reduceWhile",
+    "replicateEffect",
+    "takeUntil",
+    "takeWhile",
+  ],
+  conditionChecking: [
+    "every",
+    "exists",
+    "isFailure",
+    "isSuccess",
+    "liftPredicate",
+  ],
+  conditionalOperators: [
+    "unless",
+    "unlessEffect",
+    "when",
+    "whenEffect",
+    "whenFiberRef",
+    "whenRef",
+  ],
+  filtering: [
+    "filter",
+    "filterEffectOrElse",
+    "filterEffectOrFail",
+    "filterMap",
+    "filterOrDie",
+    "filterOrDieMessage",
+    "filterOrElse",
+    "filterOrFail",
+  ],
+  looping: ["forEach", "iterate", "loop"],
+  errorHandling: ["orElseFail"],
+  mapping: [
+    "flatMap",
+    "as",
+    "asSome",
+    "asSomeError",
+    "asVoid",
+    "flip",
+    "flipWith",
+    "map",
+    "mapAccum",
+    "mapBoth",
+    "mapError",
+    "mapErrorCause",
+    "merge",
+    "negate",
+  ],
+} as const;
+
+export type EffectTargetGroup = keyof typeof EFFECT_TARGETS;
+export type EffectTarget = (typeof EFFECT_TARGETS)[EffectTargetGroup][number];
+
+export const ALL_EFFECT_TARGETS: readonly EffectTarget[] = Object.values(EFFECT_TARGETS).flat();

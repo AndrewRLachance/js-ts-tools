@@ -35,6 +35,8 @@ export interface ExtractTypeModelOptions {
    * extraction time and serialized model size.
    */
   includeDeclarationBundles?: boolean;
+  /** In-memory replacements for existing project files, resolved against cwd. */
+  sourceTextOverrides?: ReadonlyMap<string, string>;
   cwd?: string;
 }
 
@@ -308,6 +310,7 @@ interface TypeModelTables {
 }
 
 export interface TypeModelV2 extends TypeModelTables {
+  targetTypes?: string[];
   schemaVersion: "2";
   project: TypeModelProject;
   modules: TypeModelModuleV2[];
@@ -399,7 +402,28 @@ export function extractTypeModel(options: ExtractTypeModelOptions): TypeModel {
   const tsConfigFilePath = path.resolve(cwd, options.tsConfigFilePath ?? "tsconfig.json");
   const projectRoot = path.dirname(tsConfigFilePath);
   const project = new Project({ tsConfigFilePath });
+  if (options.sourceTextOverrides?.size && options.includeDeclarationBundles) {
+    throw new Error("sourceTextOverrides cannot be combined with declaration bundles, which read from disk.");
+  }
+  for (const [filePath, text] of options.sourceTextOverrides ?? []) {
+    const sourceFile = project.getSourceFile(path.resolve(cwd, filePath));
+    if (!sourceFile) throw new Error(`Source override is not an existing project file: ${filePath}`);
+    sourceFile.replaceWithText(text);
+  }
   const selectedFiles = selectSourceFiles(project, cwd, sourceGlobs, options.excludePathIncludes ?? []);
+  return extractTypeModelFromProject(project, selectedFiles, options);
+}
+
+/** Extracts from an existing project without creating another compiler session. */
+export function extractTypeModelFromProject(
+  project: Project, selectedFiles: SourceFile[], options: ExtractTypeModelOptions,
+  targetNodes?: import("ts-morph").Node[],
+): TypeModel {
+  const cwd = path.resolve(options.cwd ?? process.cwd());
+  const tsConfigFilePath = path.resolve(cwd, options.tsConfigFilePath ?? "tsconfig.json");
+  const projectRoot = path.dirname(tsConfigFilePath);
+  const sourceGlobs = asArray(options.sourceGlob);
+  const scope = options.scope ?? "exports";
   const context: MutableContext = {
     projectRoot,
     tsConfigFilePath,
@@ -424,8 +448,12 @@ export function extractTypeModel(options: ExtractTypeModelOptions): TypeModel {
     nextSignatureId: 1,
   };
 
-  const modules = selectedFiles.map((sourceFile) => serializeModule(context, sourceFile));
-  if (context.includeCallSites) {
+  const targetRoots: string[] = [];
+  if (targetNodes) for (const node of targetNodes) {
+    targetRoots.push(serializeType(context, context.checker.getTypeAtLocation(node.compilerNode), node.compilerNode));
+  }
+  const modules = targetNodes ? [] : selectedFiles.map((sourceFile) => serializeModule(context, sourceFile));
+  if (context.includeCallSites && !targetNodes) {
     for (let index = 0; index < selectedFiles.length; index += 1) {
       modules[index].callSites = serializeSourceFileCallSites(context, selectedFiles[index]);
     }
@@ -465,6 +493,7 @@ export function extractTypeModel(options: ExtractTypeModelOptions): TypeModel {
 
   return {
     schemaVersion: "2",
+    ...(targetNodes ? { targetTypes: targetRoots } : {}),
     project: projectModel,
     modules: modules.sort((left, right) => left.filePath.localeCompare(right.filePath)),
     ...tables,

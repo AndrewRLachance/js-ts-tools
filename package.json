@@ -18,12 +18,17 @@
     "github-js-ts-search": "./bin/github-js-ts-search-cli.js",
     "tsquery": "./bin/tsquery-cli.js",
     "convert-ts-pattern": "./bin/convert-ts-pattern-cli.js",
-    "ast-xpath": "./bin/ast-xpath-cli.js"
+    "conditional-to-effect-schema-v3": "./bin/conditional-to-effect-schema-v3-cli.js",
+    "effect-v3-codemod": "./bin/effect-v3-codemod-cli.js",
+    "ast-xpath": "./bin/ast-xpath-cli.js",
+    "effect-schema": "./bin/effect-schema-cli.js"
   },
   "files": [
     "dist",
     "bin",
-    "CLI_API.md",
+    "docs/CLI_API.md",
+    "docs/PROGRAMMATIC_API.md",
+    "docs/EFFECT_CODEMOD.md",
     "GITHUB_SEARCH_API.md",
     "NOTES.md"
   ],
@@ -32,9 +37,10 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node --test",
+    "test": "npm run build && node --test \"test/**/*.test.js\"",
     "start": "tsx src/index.ts",
-    "build": "tsc -p tsconfig.json && chmod +x bin/*.js"
+    "build": "tsc -p tsconfig.json && chmod +x bin/*.js",
+    "test:conditional-smoke": "npm run build && node scripts/test-conditional-to-effect-schema-v3.js"
   },
   "keywords": [],
   "author": "",
@@ -54,10 +60,14 @@
     "@types/aws-regions": "^2.1.5",
     "@types/mysql": "^2.15.27",
     "@types/pg": "^8.20.0",
+    "cheerio": "^1.2.0",
+    "diff": "^9.0.0",
     "dts-bundle-generator": "^9.5.1",
     "fast-glob": "^3.3.3",
     "fontoxpath": "^3.34.0",
+    "jscodeshift": "^17.4.0",
     "jspath": "^0.4.0",
+    "node-html-markdown": "^2.0.0",
     "openapi-fetch": "^0.17.0",
     "slimdom": "^4.3.5",
     "stream-json": "^3.4.0",
@@ -65,6 +75,8 @@
     "typescript": "^5.9.3"
   },
   "devDependencies": {
+    "@effect/language-service": "^0.87.2",
+    "@types/jscodeshift": "^17.3.0",
     "@types/jspath": "^0.4.2",
     "@types/node": "^25.9.4",
     "openapi-typescript": "^7.13.0",

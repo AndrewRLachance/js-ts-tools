@@ -22,6 +22,8 @@
   - [`ast-xpath`](#ast-xpath)
   - [`tsquery`](#tsquery)
   - [`convert-ts-pattern`](#convert-ts-pattern)
+  - [`conditional-to-effect-schema-v3`](#conditional-to-effect-schema-v3)
+  - [`effect-v3-codemod`](#effect-v3-codemod)
 - [Exit statuses](#exit-statuses)
 
 <a id="installation"></a>
@@ -62,6 +64,8 @@ For path and glob rules used by the analysis commands, see [Source selection](#s
 | [`ast-xpath`](#ast-xpath) | Generate and match XPath 3.1 patterns over TypeScript AST XML | JSON pattern or match report |
 | [`tsquery`](#tsquery) | Query or mutate a TypeScript project with TSQuery selectors | JSON matches or mutation report |
 | [`convert-ts-pattern`](#convert-ts-pattern) | Convert safe TypeScript conditionals to `ts-pattern` | JSON report |
+| [`conditional-to-effect-schema-v3`](#conditional-to-effect-schema-v3) | Generate Effect v3 Schema filters from synchronous validators | TypeScript |
+| [`effect-v3-codemod`](#effect-v3-codemod) | Convert proven TypeScript idioms to Effect v3 operators | JSON report |
 
 <a id="choosing-a-command"></a>
 
@@ -1039,6 +1043,60 @@ convert-ts-pattern --tsconfig tsconfig.json --source "src/**/*.ts" --write
 # Readable per-candidate summary for a quick review.
 convert-ts-pattern --source "src/**/*.ts" --format text
 ```
+
+<a id="conditional-to-effect-schema-v3"></a>
+
+## `conditional-to-effect-schema-v3`
+
+Generate a schema snippet from a synchronous, one-argument validator that rejects by throwing. Source files are not modified. Run `npm run build` before invoking the checkout's `bin/conditional-to-effect-schema-v3-cli.js` directly.
+
+```bash
+conditional-to-effect-schema-v3 --source 'src/**/*.ts' \
+  --target validateOrder --base-schema OrderBase --mode auto
+
+conditional-to-effect-schema-v3 --source 'src/**/*.ts' \
+  --target validateOrder --base-schema OrderBase --format json --pretty
+```
+
+| Option | Meaning |
+| --- | --- |
+| `--target <symbol>` | Required simple or qualified validator name; ambiguous names fail. |
+| `--base-schema <expression>` | Required Effect v3 schema expression. |
+| `--source <glob>` | Required source selection; repeatable. |
+| `--tsconfig <path>` | TypeScript config; default `tsconfig.json`. |
+| `--exclude <substring>` | Exclude matching source paths; repeatable. |
+| `--schema-name <name>` | Generated constant name; default `<targetName>Schema`. |
+| `--mode <static\|auto\|runtime-wrapper>` | Default `static`; see semantics below. |
+| `--max-depth <integer>` | Maximum local call depth; default `12`, with `0` inspecting only the root. |
+| `--allow-opaque-calls <true\|false>` | Trust calls outside selected sources; default `false`. |
+| `--cwd <directory>` | Resolve configuration, sources and output relative to this directory. |
+| `--format <code\|json>` | Default `code`; JSON also contains constraints, provenance and diagnostics. |
+| `--pretty` | Pretty-print JSON; requires `--format json`. |
+| `--out <path>` | Write to a new file; existing files are never overwritten. |
+| `-h`, `--help` | Print help and exit successfully. |
+
+`static` extracts explicit throw conditions through branches, early returns, safely inlined local constants and resolved local validation calls. Mutations, default/rest parameters, loops, exceptional control flow, calls used as values, and nonportable bindings block static conversion. Static mode assumes pure validation over ordinary data and a base schema that enforces the validator's input type; it does not model arbitrary getters, proxies, coercion side effects or every possible implicit exception. Trusting opaque calls explicitly assumes they neither throw nor affect validation state; callbacks remain unsupported.
+
+`auto` uses a runtime wrapper when static conversion is blocked. `runtime-wrapper` invokes the original validator in a synchronous `Schema.filter` and turns thrown errors into validation messages. It preserves the validator's side effects on every filter invocation. Async, Promise-returning and generator root validators are rejected. Instance methods and accessors need a named one-argument adapter for wrapping.
+
+The output imports `Schema` from `effect`. Provide the base schema in the output's scope and, for wrappers, the original validator with its qualified name. The converter does not synthesize these imports or alter the source validator. A validator's return value is ignored; only thrown failures count as rejection.
+
+Code output writes diagnostics to stderr; JSON includes them in the result. Exit status is `0` for successful conversion or help and `1` for invalid arguments, unsupported conversion or I/O failure.
+
+<a id="effect-v3-codemod"></a>
+
+## `effect-v3-codemod`
+
+Run the integrated Phase 11 production rules. See [Effect codemod](EFFECT_CODEMOD.md) for supported shapes, the original 50 targets plus `flatMap` and review-only `orElseFail`, options and validation behavior.
+
+```bash
+effect-v3-codemod --source 'src/**/*.ts' --target map --pretty
+effect-v3-codemod --source 'src/**/*.ts' --write
+```
+
+`--max-passes` accepts integers from 1 through 10 and defaults to 3. Runs stop when unchanged; a pass limit is reported with `converged: false`. Cycles and validation failures prevent all writes. Reports include per-pass attempts, reason codes and pass-relative source locations.
+
+`--source` is required and repeatable. Use repeatable `--target` to select operator names, `--tsconfig`, `--cwd` and repeatable `--exclude` for project selection, `--pretty` for formatted JSON, and `--out` for a new report file. Existing output files are not overwritten, and JavaScript/TypeScript report paths are rejected. Failed runs clean up newly reserved report files. `--no-review` hides review-only candidates. `--evidence compact|full` controls evidence detail (default `compact`); reports include candidate locations and grouped `summary.skipReasons`. Default dry runs validate proposed edits in memory without writing source files; `--write` commits only when no new diagnostics are introduced. `--dry-run` cannot be combined with `--write`. Exit status is `1` when validation fails or arguments/I/O are invalid, and `0` on success or help.
 
 <a id="exit-statuses"></a>
 
